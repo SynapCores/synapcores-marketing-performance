@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Brand tokens — the "command center" theme ported from the Performance
+ * Marketing dashboard: deep-navy canvas, bright teal primary (#5eead4) with a
+ * violet secondary accent (#a78bfa), and the signature dual radial-gradient
+ * background glow.
+ */
+@layer base {
+  :root {
+    --background: 222 29% 6%;      /* #0b0e14 */
+    --foreground: 213 40% 94%;     /* #e8edf7 */
+
+    --card: 224 34% 13%;           /* #151b2b */
+    --card-foreground: 213 40% 94%;
+
+    --popover: 224 34% 13%;
+    --popover-foreground: 213 40% 94%;
+
+    --primary: 171 78% 64%;        /* #5eead4 teal */
+    --primary-foreground: 168 74% 8%;
+
+    --secondary: 224 30% 16%;
+    --secondary-foreground: 213 40% 94%;
+
+    --muted: 224 30% 16%;
+    --muted-foreground: 220 15% 61%; /* #8a95ad */
+
+    --accent: 223 30% 22%;
+    --accent-foreground: 213 40% 94%;
+
+    --destructive: 0 91% 71%;      /* #f87171 rose */
+    --destructive-foreground: 213 40% 94%;
+
+    --border: 223 32% 22%;         /* #26304a */
+    --input: 223 32% 22%;
+    --ring: 171 78% 64%;
+
+    /* extra accent for gradients / highlights */
+    --violet: 255 92% 76%;         /* #a78bfa */
+    --teal: 171 78% 64%;
+
+    --radius: 0.75rem;
+
+    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-headline: 'Inter', system-ui, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', 'Monaco', monospace;
+  }
+}
+
+body {
+  min-height: 100vh;
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+}
+
+/* Signature command-center glow — painted INSIDE the scrolling content area
+   (not a fixed layer), so it never repaints/blanks during window scroll.
+   `local` anchors it to the top of the content. */
+main {
+  background-image:
+    radial-gradient(760px 380px at 100% 0%, hsl(var(--violet) / 0.10), transparent 70%),
+    radial-gradient(680px 360px at 0% 0%, hsl(var(--teal) / 0.07), transparent 70%);
+  background-repeat: no-repeat;
+  background-attachment: local;
+}
+
+/* Gradient accents that echo the standalone dashboard */
+@layer components {
+  .brand-gradient {
+    background-image: linear-gradient(135deg, hsl(var(--teal)), hsl(var(--violet)));
+  }
+  .brand-gradient-text {
+    background-image: linear-gradient(135deg, hsl(var(--teal)), hsl(var(--violet)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  /* KPI tiles + hero cards get a subtle top-lit gradient like the demo */
+  .tile-gradient {
+    background-image: linear-gradient(180deg, hsl(224 34% 15%), hsl(222 32% 9%));
+  }
+
+  /* ── colored "halo" bloom on accent elements — the signature glow of the
+     original command-center dashboard ─────────────────────────────────────── */
+  .glow-teal { box-shadow: 0 0 26px -6px hsl(var(--teal) / 0.55); }
+  .glow-violet { box-shadow: 0 0 26px -6px hsl(var(--violet) / 0.50); }
+
+  /* KPI numbers + accent figures get a soft luminous bloom */
+  .glow-text { text-shadow: 0 0 20px hsl(var(--teal) / 0.35); }
+
+  /* the agentic CTA — mint→violet gradient with a bloom halo */
+  .brand-gradient {
+    background-image: linear-gradient(135deg, hsl(var(--teal)), hsl(var(--violet)));
+    box-shadow: 0 10px 34px -10px hsl(var(--teal) / 0.60), 0 6px 24px -10px hsl(var(--violet) / 0.55);
+  }
+
+  /* Click-truth bars — the gradient "observed" bar glows; the "reported"
+     track is a dashed outline behind it, exactly like the demo. */
+  .bar-track {
+    position: relative;
+    height: 0.55rem;
+    border-radius: 9999px;
+    border: 1px dashed hsl(var(--border));
+    background: hsl(var(--muted) / 0.4);
+  }
+  .bar-observed {
+    position: absolute;
+    left: 0; top: 50%;
+    height: 0.55rem;
+    transform: translateY(-50%);
+    border-radius: 9999px;
+    background-image: linear-gradient(90deg, hsl(var(--teal)), hsl(var(--violet)));
+    box-shadow: 0 0 14px -2px hsl(var(--teal) / 0.65);
+  }
+}

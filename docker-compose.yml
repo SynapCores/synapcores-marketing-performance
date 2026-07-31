@@ -1,0 +1,70 @@
+version: '3.9'
+
+# ─────────────────────────────────────────────────────────────────────────
+# SynapCores — Performance Marketing reference app (engine + app)
+#
+# Quickstart:
+#   1. cp .env.example .env
+#   2. docker compose up -d synapcores
+#   3. Get the admin password:  docker compose logs synapcores | grep "password:"
+#   4. Log into the engine UI at :28080, mint an admin API token, paste it
+#      into .env as SYNAPCORES_ADMIN_API_KEY
+#   5. docker compose up -d
+#   6. Open the app at http://localhost:3005/register, then load the sample
+#      dataset from the Ingest page (or push your own via the ETL API).
+#
+# The whole warehouse — ad spend, first-party clickstream, identity,
+# conversions, orders, and the ad creative (as 384-dim embeddings) — plus
+# last-touch attribution and the 90-day LTV scorecard live in one engine.
+# ─────────────────────────────────────────────────────────────────────────
+
+services:
+  synapcores:
+    image: synapcores/community:v1.14.0-ce
+    container_name: synapcores-engine
+    environment:
+      AIDB_ACCEPT_LICENSE: '1'
+      AIDB_JWT_SECRET: ${AIDB_JWT_SECRET:?Set AIDB_JWT_SECRET in .env}
+    ports:
+      - '28080:8080'
+    volumes:
+      - sc-engine-data:/var/lib/synapcores
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:8080/health']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    image: node:22-alpine
+    container_name: synapcores-marketing-app
+    depends_on:
+      synapcores:
+        condition: service_healthy
+    working_dir: /app
+    volumes:
+      - ./:/app
+      - sc-marketing-app-cache:/app/.next
+    environment:
+      SYNAPCORES_URL: http://synapcores:8080
+      SYNAPCORES_ADMIN_API_KEY: ${SYNAPCORES_ADMIN_API_KEY:?Set SYNAPCORES_ADMIN_API_KEY in .env}
+      FRAMEWORK_TENANT_KEYS_DIR: /var/synapcores/tenant-keys
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env}
+      NEXTAUTH_URL: ${APP_NEXTAUTH_URL:-http://localhost:3005}
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-console}
+    ports:
+      - '3005:3005'
+    command: >
+      sh -c "
+        corepack enable && corepack prepare pnpm@9 --activate &&
+        pnpm install --frozen-lockfile &&
+        pnpm framework:bootstrap &&
+        pnpm app:bootstrap &&
+        pnpm app:dev
+      "
+    restart: unless-stopped
+
+volumes:
+  sc-engine-data:
+  sc-marketing-app-cache:
