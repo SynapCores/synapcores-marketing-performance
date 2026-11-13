@@ -18,6 +18,7 @@ export default async function AuthedLayout({
     items: [
       { href: '/dashboard', label: 'Dashboard', icon: <SidebarIcons.Home className="h-4 w-4" /> },
       { href: '/ingest', label: 'Ingest Data', icon: <SidebarIcons.Activity className="h-4 w-4" /> },
+      { href: '/settings/pixels', label: 'Tracking Pixels', icon: <SidebarIcons.FileLock2 className="h-4 w-4" /> },
       { href: '/campaigns', label: 'Campaigns', icon: <SidebarIcons.ShieldAlert className="h-4 w-4" /> },
       { href: '/attribution', label: 'Attribution', icon: <SidebarIcons.FileLock2 className="h-4 w-4" /> },
       { href: '/creative', label: 'Creative', icon: <SidebarIcons.Activity className="h-4 w-4" /> },

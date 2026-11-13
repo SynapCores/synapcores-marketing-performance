@@ -88,21 +88,24 @@ by a pixel you host and drop onto the sites you own. No third-party analytics,
 no shared cookie, no data leaving your stack. One deployment of this app can
 track several of your domains at once.
 
-**1. Mint a site write-key.** In the app, go to **Settings → API keys** and
-create a key (label it e.g. `pixel`). Copy the `sk_user_…` value — it is shown
-once. This key authorizes writes to the collector and nothing the pixel does can
-exceed it.
+**1. Create a pixel.** In the app, go to **Settings → Tracking Pixels** and
+create one (label it after the site it goes on). You get a **`pk_…` pixel id** —
+a *public asset identifier*, exactly like a Facebook Pixel ID. It is **not a
+secret**: it is safe to show, copy and embed, it is **write-only** (it can only
+drop events into your workspace — no reads, no admin, nothing else), and you can
+rotate or disable it any time. You can optionally restrict it to specific
+origins (the domain-verification equivalent).
 
 **2. Drop the snippet on each domain you want to track.** Point `src` and
-`data-endpoint` at wherever *this app* is deployed; `data-site-id` is the key
-from step 1. The same snippet goes on every one of your domains:
+`data-endpoint` at wherever *this app* is deployed; `data-site-id` is the
+`pk_…` id from step 1. The same snippet goes on every one of your domains:
 
 ```html
 <!-- on shop.yourco.com, blog.yourco.com, yourco.io, … -->
 <script
   src="https://metrics.yourco.com/track.js"
   data-endpoint="https://metrics.yourco.com/api/v1/collect"
-  data-site-id="sk_user_XXXXXXXXXXXX"
+  data-site-id="pk_XXXXXXXXXXXXXXXXXXXXXX"
   defer></script>
 ```
 
@@ -123,8 +126,8 @@ the **domain it came from** (the `site` column on `recipe_pm_click_events` and
 `recipe_pm_conversions`), so three or four domains sharing one key stay cleanly
 separable — filter by `site` in the **Data Tables** explorer or any query.
 (Want each domain fully isolated as its own workspace instead of one tagged
-pool? Mint a separate key per domain; per-tenant data isolation is the next step
-on the roadmap.)
+pool? Mint a separate pixel per domain; per-tenant data isolation is the next
+step on the roadmap.)
 
 **4. Verify it's flowing.** Open a tracked page (e.g. with
 `?utm_source=facebook&utm_campaign=fb-1001&fbclid=demo`), then in the app open
@@ -132,17 +135,22 @@ on the roadmap.)
 A ready-made local test page lives at `/collect-demo.html`.
 
 **How it works.** `public/track.js` batches events and POSTs them to
-`POST /api/v1/collect`. The route authenticates the key, maps the batch into the
+`POST /api/v1/collect`. The route resolves the `pk_…` pixel id to your
+workspace, enforces its origin allowlist and rate limit, maps the batch into the
 warehouse's clickstream / identity / conversion tables, and refreshes attribution
 — all in the one SynapCores engine. It is a clean-room, dependency-free collector
 (a Next.js route handler, a built-in rate limiter, `crypto`/`Date` instead of
 `uuid`): **nothing beyond the app's own stack is pulled in.**
 
-> **Security note.** The `data-site-id` key is embedded in your public pages, so
-> treat it as exposed: mint a **dedicated** key just for the pixel (never your
-> admin key) so you can rotate it on its own. A dedicated public, write-only
-> key type (`pk_…`) that is safe to embed by design is the next hardening step;
-> until then the write-key is an ordinary app key scoped to its tenant.
+> **Security model — identifier, not credential.** The thing in your page source
+> is a **public, write-only pixel id**, not an API key — the same posture as a
+> Facebook Pixel ID. Lifting it from a page lets someone send junk events at your
+> pixel (rate-limited, origin-gated, and killable by disabling the pixel) and
+> nothing more: it cannot read your data or touch any other API. Your **secret**
+> credentials (`sk_user_…` API keys) never go in a browser — they are for
+> **server-to-server** ingest only (the Conversions-API equivalent), sent as
+> `Authorization: Bearer sk_user_…` from your backend. The collector deliberately
+> refuses a secret key embedded in a beacon body: what you embed is always an id.
 
 ## The data & logic
 

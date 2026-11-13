@@ -22,7 +22,7 @@
   // Configuration (customize these values)
   const config = {
     endpoint: '/api/v1/collect',  // SynapCores marketing collector (override with data-endpoint)
-    siteId: 'pk_demo',  // public site write-key → resolves to a tenant (override with data-site-id)
+    siteId: 'pk_demo',  // PUBLIC pixel identifier (pk_...), like a Facebook Pixel ID — safe to embed, write-only, resolves to your workspace (override with data-site-id)
     cookieName: '_ecom_visitor',
     cookieExpiry: 365, // days
     sessionTimeout: 30, // minutes

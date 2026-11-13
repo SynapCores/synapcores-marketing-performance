@@ -21,3 +21,22 @@ CREATE TABLE IF NOT EXISTS recipe_pm_attribution (
 CREATE TABLE IF NOT EXISTS recipe_pm_campaign_scorecard (
   campaign_id TEXT PRIMARY KEY, campaign_name TEXT, platform TEXT, spend DOUBLE, new_customers INTEGER,
   cac DOUBLE, day0_roas DOUBLE, ltv_90d DOUBLE, ltv_roas DOUBLE, margin_roas DOUBLE);
+
+-- First-party tracking pixels. The `id` (pk_...) is a PUBLIC asset identifier,
+-- embedded in your pages' source like a Facebook Pixel ID — it is NOT a secret
+-- and is deliberately NOT hashed (we look it up by value). It is write-only: it
+-- resolves to a workspace so the collector can accept events, and it can do
+-- nothing else — no reads, no admin, no other API. Optional `allowed_origins`
+-- (comma-separated scheme+host list) is the domain-verification analogue; NULL
+-- means unrestricted. Secret credentials (sk_user_...) stay server-side for the
+-- Conversions-API-style ingest path and are never embedded.
+CREATE TABLE IF NOT EXISTS tracking_pixels (
+  id              TEXT PRIMARY KEY,
+  tenant_id       TEXT NOT NULL,
+  user_id         TEXT NOT NULL,
+  label           TEXT NOT NULL,
+  allowed_origins TEXT,
+  created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+  disabled_at     TIMESTAMP,
+  last_used_at    TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_tracking_pixels_tenant ON tracking_pixels(tenant_id);
