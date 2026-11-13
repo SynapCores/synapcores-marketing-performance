@@ -2,7 +2,7 @@
   "name": "@synapcores/marketing-performance-monorepo",
   "version": "0.1.0",
   "private": true,
-  "description": "Performance Marketing — a full-stack reference app on the SynapCores AI-native database (true ROAS + 90-day LTV, last-touch attribution, creative-angle embeddings, agentic budget recommendation).",
+  "description": "Performance Marketing \u2014 a full-stack reference app on the SynapCores AI-native database (true ROAS + 90-day LTV, last-touch attribution, creative-angle embeddings, agentic budget recommendation).",
   "license": "Apache-2.0",
   "packageManager": "pnpm@9.0.0",
   "scripts": {
@@ -19,5 +19,18 @@
   "engines": {
     "node": ">=20",
     "pnpm": ">=9"
+  },
+  "pnpm": {
+    "overrides": {
+      "next": ">=15.5.24 <16",
+      "zod": ">=4.6.6 <5",
+      "sharp": ">=0.35.4 <0.36",
+      "browserslist": ">=4.28.7 <5",
+      "postcss": ">=8.5.23 <9",
+      "postcss-selector-parser": ">=6.1.3 <7",
+      "baseline-browser-mapping": ">=2.11.0 <3",
+      "nanoid": ">=3.3.18 <4",
+      "source-map-js": ">=1.2.2 <2"
+    }
   }
 }
