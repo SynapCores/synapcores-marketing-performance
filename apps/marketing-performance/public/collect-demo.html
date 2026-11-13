@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Beacon demo</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 16px; color: #0b0e14; }
+    button { font: inherit; padding: 10px 16px; margin: 4px 6px 4px 0; border: 1px solid #a78bfa; background: #f5f3ff; border-radius: 8px; cursor: pointer; }
+    button:hover { background: #ede9fe; }
+    code { background: #f4f4f5; padding: 2px 6px; border-radius: 4px; }
+    #log { margin-top: 16px; padding: 12px; background: #0b0e14; color: #5eead4; border-radius: 8px; white-space: pre-wrap; min-height: 80px; font-family: ui-monospace, monospace; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>First-party beacon → SynapCores</h1>
+  <p>This page loads <code>/track.js</code> and streams events to <code>/api/v1/collect</code>.
+     Open with a paid-click URL to seed UTMs, e.g.
+     <code>?utm_source=facebook&utm_medium=paid_social&utm_campaign=fb-1001&fbclid=demo123</code>.</p>
+
+  <button onclick="EcommTracker.track('page_view', { path: location.pathname })">Track page_view</button>
+  <button onclick="EcommTracker.track('identify', { customer_id: 501 })">Identify (customer 501)</button>
+  <button onclick="EcommTracker.track('purchase', { revenue: 95 })">Track purchase ($95)</button>
+  <button onclick="EcommTracker.processEvents ? EcommTracker.processEvents(true) : null">Flush now</button>
+
+  <div id="log">Waiting…</div>
+
+  <!-- The ported EcommTracker beacon. data-site-id is the public write-key → tenant. -->
+  <script src="/track.js"
+          data-endpoint="/api/v1/collect"
+          data-site-id="pk_demo"
+          data-debug="true"></script>
+  <script>
+    // Surface what the beacon logs, so the flow is visible on the page.
+    const logEl = document.getElementById('log');
+    const orig = console.log;
+    console.log = function (...a) { orig.apply(console, a); logEl.textContent = a.map(x => typeof x === 'object' ? JSON.stringify(x) : String(x)).join(' ') + '\n' + logEl.textContent; };
+  </script>
+</body>
+</html>

@@ -53,6 +53,8 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env}
       NEXTAUTH_URL: ${APP_NEXTAUTH_URL:-http://localhost:3005}
       MAIL_PROVIDER: ${MAIL_PROVIDER:-console}
+      # Optional dev-only collector fallback; ignored in production builds.
+      COLLECTOR_DEV_TENANT_ID: ${COLLECTOR_DEV_TENANT_ID:-}
     ports:
       - '3005:3005'
     command: >

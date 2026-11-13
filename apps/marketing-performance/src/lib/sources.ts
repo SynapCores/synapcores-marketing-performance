@@ -35,7 +35,7 @@ export const SOURCES: Record<string, SourceDef> = {
   },
   clickstream: {
     id: 'clickstream', label: 'Web analytics — clickstream', table: 'recipe_pm_click_events',
-    columns: ['event_id', 'anonymous_id', 'occurred_at', 'landing_path', 'utm_source', 'utm_medium', 'utm_campaign', 'click_id', 'device'],
+    columns: ['event_id', 'anonymous_id', 'occurred_at', 'landing_path', 'utm_source', 'utm_medium', 'utm_campaign', 'click_id', 'device', 'site'],
     keyColumn: 'event_id',
     sample: '{"anonymous_id":"a_f01","occurred_at":"2026-05-04 10:12:00","landing_path":"/lp/summer","utm_source":"facebook","utm_medium":"paid_social","utm_campaign":"fb-1001","click_id":"fbclid_8Kq2","device":"mobile"}',
   },
@@ -46,7 +46,7 @@ export const SOURCES: Record<string, SourceDef> = {
   },
   conversions: {
     id: 'conversions', label: 'Conversions', table: 'recipe_pm_conversions',
-    columns: ['conversion_id', 'anonymous_id', 'occurred_at', 'event_name', 'revenue'], keyColumn: 'conversion_id',
+    columns: ['conversion_id', 'anonymous_id', 'occurred_at', 'event_name', 'revenue', 'site'], keyColumn: 'conversion_id',
     sample: '{"anonymous_id":"a_f01","occurred_at":"2026-05-08 09:00:00","event_name":"first_purchase","revenue":95}',
   },
   orders: {

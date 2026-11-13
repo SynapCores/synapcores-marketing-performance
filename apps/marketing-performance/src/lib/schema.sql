@@ -8,11 +8,11 @@ CREATE TABLE IF NOT EXISTS recipe_pm_creative (
   creative_id INTEGER PRIMARY KEY, campaign_id TEXT, headline TEXT, body_copy TEXT, angle VECTOR(384));
 CREATE TABLE IF NOT EXISTS recipe_pm_click_events (
   event_id INTEGER PRIMARY KEY, anonymous_id TEXT, occurred_at TIMESTAMP, landing_path TEXT,
-  utm_source TEXT, utm_medium TEXT, utm_campaign TEXT, click_id TEXT, device TEXT);
+  utm_source TEXT, utm_medium TEXT, utm_campaign TEXT, click_id TEXT, device TEXT, site TEXT);
 CREATE TABLE IF NOT EXISTS recipe_pm_identity (
   anonymous_id TEXT PRIMARY KEY, customer_id INTEGER, identified_at TIMESTAMP);
 CREATE TABLE IF NOT EXISTS recipe_pm_conversions (
-  conversion_id INTEGER PRIMARY KEY, anonymous_id TEXT, occurred_at TIMESTAMP, event_name TEXT, revenue DOUBLE);
+  conversion_id INTEGER PRIMARY KEY, anonymous_id TEXT, occurred_at TIMESTAMP, event_name TEXT, revenue DOUBLE, site TEXT);
 CREATE TABLE IF NOT EXISTS recipe_pm_orders (
   order_id INTEGER PRIMARY KEY, customer_id INTEGER, ordered_at TIMESTAMP, revenue DOUBLE, gross_margin DOUBLE);
 CREATE TABLE IF NOT EXISTS recipe_pm_attribution (

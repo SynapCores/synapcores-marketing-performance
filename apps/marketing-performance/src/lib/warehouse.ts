@@ -1,6 +1,7 @@
 import 'server-only';
 import { getAdminClient } from '@synapcores/app-framework/db/server';
 import { SCHEMA, TABLES, SEED, ATTRIBUTION, SCORECARD, QUERIES, AGENT_TASK } from './recipe-sql';
+import { SOURCES, mapRows } from './sources';
 
 /**
  * The performance-marketing warehouse — recipe 121 as a first-class data layer.
@@ -67,6 +68,25 @@ export async function ingestRows(table: string, columns: string[], rows: unknown
     await run(`UPDATE recipe_pm_creative SET angle = EMBED(headline || ' ' || body_copy) WHERE angle IS NULL`);
   }
   return n;
+}
+
+/**
+ * Ingest an array of source-shaped objects into a named source's warehouse
+ * table, auto-numbering the primary key from the current max so callers may
+ * omit it. Shared by the ETL REST route and the first-party beacon collector.
+ * Returns the number of rows written (0 for an empty or unknown source).
+ */
+export async function ingestSource(sourceId: string, records: Array<Record<string, unknown>>): Promise<number> {
+  const def = SOURCES[sourceId];
+  if (!def || !records.length) return 0;
+  await ensureSchema();
+  let startId = 1;
+  try {
+    const max = await db().sqlScalar<number>(`SELECT COALESCE(MAX(${def.keyColumn}), 0) FROM ${def.table}`);
+    if (typeof max === 'number') startId = max + 1;
+  } catch { /* text-keyed tables ignore startId */ }
+  const rows = mapRows(def, records, startId);
+  return ingestRows(def.table, def.columns, rows);
 }
 
 function sqlLit(v: unknown): string {

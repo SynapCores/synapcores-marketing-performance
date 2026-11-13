@@ -17,8 +17,15 @@ export interface ResolvedApiKey {
 export async function resolveBearerKey(req: Request): Promise<ResolvedApiKey | null> {
   const auth = req.headers.get('authorization');
   if (!auth || !auth.toLowerCase().startsWith('bearer ')) return null;
-  const plaintext = auth.slice(7).trim();
-  if (!plaintext.startsWith('sk_user_')) return null;
+  return resolveApiKeyPlaintext(auth.slice(7).trim());
+}
+
+/**
+ * Resolve a raw app API key string (from a header OR a request body, e.g. the
+ * beacon's site write-key) to {tenantId, userId, keyId}, or null if invalid.
+ */
+export async function resolveApiKeyPlaintext(plaintext: string): Promise<ResolvedApiKey | null> {
+  if (!plaintext || !plaintext.startsWith('sk_user_')) return null;
 
   const prefix = plaintext.slice(0, 12);
   const db = getAdminClient();
