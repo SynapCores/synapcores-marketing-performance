@@ -154,75 +154,70 @@ export const SEED = [
 ];
 
 // ── Step 7: last-touch attribution (30-day lookback, click <= convert) ──────
+// NOTE: written with inline derived tables, not CTEs — on SynapCores 2.x,
+// joins between CTEs drop the ON predicate (cross product). Derived-table
+// joins behave correctly.
 export const ATTRIBUTION = `
   INSERT INTO recipe_pm_attribution (conversion_id, anonymous_id, customer_id, campaign_id, platform, first_order_revenue, converted_at)
-  WITH touches AS (
-    SELECT v.conversion_id AS conversion_id, v.anonymous_id AS anonymous_id, v.revenue AS revenue,
-           e.utm_campaign AS campaign_id, e.utm_source AS source,
-           e.occurred_at AS click_at, v.occurred_at AS convert_at
-    FROM recipe_pm_conversions v
-    JOIN recipe_pm_click_events e ON e.anonymous_id = v.anonymous_id
-    WHERE e.occurred_at <= v.occurred_at
-      AND (julianday(v.occurred_at) - julianday(e.occurred_at)) <= 30
-  ),
-  ranked AS (
-    SELECT conversion_id, anonymous_id, revenue, campaign_id, source, click_at, convert_at,
-           ROW_NUMBER() OVER (PARTITION BY conversion_id ORDER BY click_at DESC) AS rn
-    FROM touches
-  ),
-  won AS (
-    SELECT conversion_id, anonymous_id, revenue, campaign_id, source, convert_at
-    FROM ranked WHERE rn = 1
-  )
   SELECT w.conversion_id, w.anonymous_id, i.customer_id, w.campaign_id, w.source, w.revenue, w.convert_at
-  FROM won w JOIN recipe_pm_identity i ON i.anonymous_id = w.anonymous_id`;
+  FROM (
+    SELECT conversion_id, anonymous_id, revenue, campaign_id, source, convert_at
+    FROM (
+      SELECT v.conversion_id AS conversion_id, v.anonymous_id AS anonymous_id, v.revenue AS revenue,
+             e.utm_campaign AS campaign_id, e.utm_source AS source,
+             v.occurred_at AS convert_at,
+             ROW_NUMBER() OVER (PARTITION BY v.conversion_id ORDER BY e.occurred_at DESC) AS rn
+      FROM recipe_pm_conversions v
+      JOIN recipe_pm_click_events e ON e.anonymous_id = v.anonymous_id
+      WHERE e.occurred_at <= v.occurred_at
+        AND (julianday(v.occurred_at) - julianday(e.occurred_at)) <= 30
+    ) ranked
+    WHERE rn = 1
+  ) w
+  JOIN recipe_pm_identity i ON i.anonymous_id = w.anonymous_id`;
 
 // ── Step 10: build the 90-day scorecard (the ROAS flip lives here) ──────────
 export const SCORECARD = `
   INSERT INTO recipe_pm_campaign_scorecard (campaign_id, campaign_name, platform, spend, new_customers, cac, day0_roas, ltv_90d, ltv_roas, margin_roas)
-  WITH spend AS (
-    SELECT campaign_id, platform, campaign_name, SUM(spend) AS spend
+  SELECT s.campaign_id, s.campaign_name, s.platform, s.spend, c.new_customers,
+         ROUND(COALESCE(s.spend / NULLIF(c.new_customers, 0), 0), 2),
+         ROUND(COALESCE(c.day0_revenue / NULLIF(s.spend, 0), 0), 3),
+         ROUND(COALESCE(l.ltv_revenue / NULLIF(c.new_customers, 0), 0), 2),
+         ROUND(COALESCE(l.ltv_revenue / NULLIF(s.spend, 0), 0), 2),
+         ROUND(COALESCE(l.ltv_margin / NULLIF(s.spend, 0), 0), 2)
+  FROM (
+    SELECT campaign_id, platform, campaign_name, COALESCE(SUM(spend), 0) AS spend
     FROM recipe_pm_ad_spend GROUP BY campaign_id, platform, campaign_name
-  ),
-  cohort AS (
-    SELECT campaign_id, COUNT(*) AS new_customers, SUM(first_order_revenue) AS day0_revenue
+  ) s
+  JOIN (
+    SELECT campaign_id, COUNT(*) AS new_customers, COALESCE(SUM(first_order_revenue), 0) AS day0_revenue
     FROM recipe_pm_attribution GROUP BY campaign_id
-  ),
-  ltv AS (
-    SELECT a.campaign_id AS campaign_id, SUM(o.revenue) AS ltv_revenue, SUM(o.gross_margin) AS ltv_margin
+  ) c ON c.campaign_id = s.campaign_id
+  JOIN (
+    SELECT a.campaign_id AS campaign_id, COALESCE(SUM(o.revenue), 0) AS ltv_revenue, COALESCE(SUM(o.gross_margin), 0) AS ltv_margin
     FROM recipe_pm_attribution a
     JOIN recipe_pm_orders o ON o.customer_id = a.customer_id
     WHERE (julianday(o.ordered_at) - julianday(a.converted_at)) <= 90
     GROUP BY a.campaign_id
-  )
-  SELECT s.campaign_id, s.campaign_name, s.platform, s.spend, c.new_customers,
-         ROUND(s.spend / c.new_customers, 2),
-         ROUND(c.day0_revenue / s.spend, 3),
-         ROUND(l.ltv_revenue / c.new_customers, 2),
-         ROUND(l.ltv_revenue / s.spend, 2),
-         ROUND(l.ltv_margin / s.spend, 2)
-  FROM spend s
-  JOIN cohort c ON c.campaign_id = s.campaign_id
-  JOIN ltv l ON l.campaign_id = s.campaign_id`;
+  ) l ON l.campaign_id = s.campaign_id`;
 
 // ── Analysis queries (read side) ────────────────────────────────────────────
 export const QUERIES = {
   // Step 6: platform-reported vs site-observed clicks → true CPC
   clickTruth: `
-    WITH platform AS (
-      SELECT campaign_id, SUM(spend) AS spend, SUM(impressions) AS impressions, SUM(clicks_reported) AS clicks_reported
+    SELECT p.campaign_id, p.spend, p.clicks_reported, s.clicks_observed,
+           ROUND(COALESCE(p.spend / NULLIF(s.clicks_observed, 0), 0), 2) AS true_cpc,
+           ROUND(COALESCE((p.clicks_reported - s.clicks_observed) * 100.0 / NULLIF(s.clicks_observed, 0), 0), 1) AS inflation_pct
+    FROM (
+      SELECT campaign_id, COALESCE(SUM(spend), 0) AS spend, COALESCE(SUM(impressions), 0) AS impressions, COALESCE(SUM(clicks_reported), 0) AS clicks_reported
       FROM recipe_pm_ad_spend GROUP BY campaign_id
-    ),
-    site AS (
+    ) p
+    JOIN (
       SELECT utm_campaign AS campaign_id, COUNT(*) AS clicks_observed
       FROM recipe_pm_click_events
       WHERE occurred_at < '2026-05-07 00:00:00'
       GROUP BY utm_campaign
-    )
-    SELECT p.campaign_id, p.spend, p.clicks_reported, s.clicks_observed,
-           ROUND(p.spend / s.clicks_observed, 2) AS true_cpc,
-           ROUND((p.clicks_reported - s.clicks_observed) * 100.0 / s.clicks_observed, 1) AS inflation_pct
-    FROM platform p JOIN site s ON s.campaign_id = p.campaign_id
+    ) s ON s.campaign_id = p.campaign_id
     ORDER BY p.spend DESC`,
 
   scorecard: `
@@ -232,23 +227,27 @@ export const QUERIES = {
 
   // Step 11: creative discount-affinity vs LTV
   creativeAngle: `
-    WITH angle AS (
-      SELECT campaign_id,
-             ROUND(COSINE_SIMILARITY(angle, EMBED('limited time flash sale discount hurry cheapest price')), 4) AS discount_affinity
-      FROM recipe_pm_creative
-    ),
-    spend AS (SELECT campaign_id, campaign_name, SUM(spend) AS spend FROM recipe_pm_ad_spend GROUP BY campaign_id, campaign_name),
-    cohort AS (SELECT campaign_id, COUNT(*) AS new_customers FROM recipe_pm_attribution GROUP BY campaign_id),
-    ltv AS (SELECT a.campaign_id AS campaign_id, SUM(o.revenue) AS ltv_revenue
-            FROM recipe_pm_attribution a JOIN recipe_pm_orders o ON o.customer_id = a.customer_id GROUP BY a.campaign_id)
     SELECT s.campaign_name, s.campaign_id, g.discount_affinity,
-           ROUND(l.ltv_revenue / c.new_customers, 2) AS ltv_90d,
-           ROUND(l.ltv_revenue / s.spend, 2) AS ltv_roas,
+           ROUND(COALESCE(l.ltv_revenue / NULLIF(c.new_customers, 0), 0), 2) AS ltv_90d,
+           ROUND(COALESCE(l.ltv_revenue / NULLIF(s.spend, 0), 0), 2) AS ltv_roas,
            cr.headline
-    FROM spend s
-    JOIN angle g ON g.campaign_id = s.campaign_id
-    JOIN cohort c ON c.campaign_id = s.campaign_id
-    JOIN ltv l ON l.campaign_id = s.campaign_id
+    FROM (
+      SELECT campaign_id, campaign_name, COALESCE(SUM(spend), 0) AS spend
+      FROM recipe_pm_ad_spend GROUP BY campaign_id, campaign_name
+    ) s
+    JOIN (
+      SELECT campaign_id,
+             ROUND(COALESCE(COSINE_SIMILARITY(angle, EMBED('limited time flash sale discount hurry cheapest price')), 0), 4) AS discount_affinity
+      FROM recipe_pm_creative
+    ) g ON g.campaign_id = s.campaign_id
+    JOIN (
+      SELECT campaign_id, COUNT(*) AS new_customers
+      FROM recipe_pm_attribution GROUP BY campaign_id
+    ) c ON c.campaign_id = s.campaign_id
+    JOIN (
+      SELECT a.campaign_id AS campaign_id, COALESCE(SUM(o.revenue), 0) AS ltv_revenue
+      FROM recipe_pm_attribution a JOIN recipe_pm_orders o ON o.customer_id = a.customer_id GROUP BY a.campaign_id
+    ) l ON l.campaign_id = s.campaign_id
     JOIN recipe_pm_creative cr ON cr.campaign_id = s.campaign_id
     ORDER BY g.discount_affinity DESC`,
 
@@ -261,7 +260,7 @@ export const QUERIES = {
 
   kpis: `
     SELECT
-      (SELECT ROUND(SUM(spend),2) FROM recipe_pm_ad_spend) AS total_spend,
+      (SELECT ROUND(COALESCE(SUM(spend), 0), 2) FROM recipe_pm_ad_spend) AS total_spend,
       (SELECT COUNT(*) FROM recipe_pm_attribution) AS new_customers,
       (SELECT COUNT(*) FROM recipe_pm_campaign_scorecard) AS campaigns`,
 };
