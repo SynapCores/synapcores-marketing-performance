@@ -972,10 +972,17 @@
         timestamp: Date.now(),
         url: window.location.href,
         referrer: document.referrer,
+        title: document.title,
         userAgent: navigator.userAgent,
+        language: navigator.language || null,
+        timezone: (function() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (e) { return null; } })(),
         viewport: {
           width: window.innerWidth,
           height: window.innerHeight
+        },
+        screen: {
+          width: window.screen ? window.screen.width : null,
+          height: window.screen ? window.screen.height : null
         },
         events: eventsToProcess
       };

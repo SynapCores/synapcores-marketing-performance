@@ -7,6 +7,7 @@ import { kpis, scorecard, clickTruth, creativeAngle, type Row } from '@/lib/ware
 import FlipConnect, { type FlipRow } from './FlipConnect';
 import AngleScatter, { type AngleRow } from './AngleScatter';
 import AskCard from './AskCard';
+import VisitorCard from './VisitorCard';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +18,7 @@ const pdot = (p: unknown) => ({ facebook: '#4267B2', tiktok: '#ff0050', google: 
 const short = (n: unknown) => String(n ?? '').replace(/_/g, ' ');
 
 export default async function DashboardPage() {
-  await requireSession();
+  const session = await requireSession();
   const k = await kpis();
 
   if (!k.new_customers) {
@@ -29,6 +30,7 @@ export default async function DashboardPage() {
             <CardDescription>Ingest your ad-platform spend and clickstream, or load the sample dataset to see the full attribution and LTV analysis.</CardDescription></CardHeader>
           <CardContent><Link href="/ingest"><Button>Go to Ingest Data →</Button></Link></CardContent>
         </Card>
+        <VisitorCard tenantId={session.tenant?.id} />
       </div>
     );
   }
@@ -74,6 +76,8 @@ export default async function DashboardPage() {
           </CardContent></Card>
         ))}
       </div>
+
+      <VisitorCard tenantId={session.tenant?.id} />
 
       <Card className="tile-gradient">
         <CardHeader><CardTitle>The ROAS Flip</CardTitle>

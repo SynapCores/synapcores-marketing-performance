@@ -4,6 +4,12 @@ import { isPixelId, resolvePixel, originAllowed } from '@/lib/pixels';
 import { mapBatch, type BeaconBatch } from '@/lib/collector';
 import { ingestSource, rebuildDerived } from '@/lib/warehouse';
 import { clientIp, makeLimiter } from '@/lib/security';
+import { insertEvents } from '@/lib/event-store';
+import { buildEventRows } from '@/lib/visitor/events';
+import { lookupGeo } from '@/lib/visitor/geo';
+import { clientIpFromHeaders, normalizeIp } from '@/lib/visitor/ip';
+import { mustDropForPrivacy } from '@/lib/visitor/privacy';
+import { parseUserAgent } from '@/lib/visitor/ua';
 
 export const runtime = 'nodejs';
 
@@ -157,6 +163,39 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: { code: 'rate_limited', message: 'Too many batches; slow down.' } }, { status: 429, headers: cors });
   }
 
+  // Visitor opted out (DNT / GPC) on a site whose snippet promises to honour it.
+  const pageHost = hostOf(origin) ?? hostOf(typeof batch.url === 'string' ? batch.url : null);
+  if (mustDropForPrivacy(req.headers, pageHost)) {
+    return NextResponse.json({ data: { accepted: 0, dropped: 'privacy_signal' } }, { headers: cors });
+  }
+
+  // ── raw visitor events: every event, enriched (IP, geo, UA, bot) ──────────
+  let stored = 0;
+  try {
+    const hops = Number(process.env.TRUSTED_PROXY_HOPS ?? 1) || 1;
+    const ip = key.kind === 'key'
+      ? normalizeIp(typeof batch.ip === 'string' ? batch.ip : null) ?? clientIpFromHeaders(req.headers, hops)
+      : clientIpFromHeaders(req.headers, hops);
+    const headerUa = req.headers.get('user-agent');
+    const bodyUa = typeof batch.userAgent === 'string' ? batch.userAgent : null;
+    // Browser beacons: the request header IS the browser. S2S: the body names the end user.
+    const userAgent = key.kind === 'key' ? bodyUa ?? headerUa : headerUa ?? bodyUa;
+    const rows = buildEventRows(batch, {
+      tenantId: key.tenantId,
+      pixelId: key.kind === 'pixel' ? key.keyId : null,
+      sourceKind: key.kind,
+      ip,
+      geo: lookupGeo(ip),
+      ua: parseUserAgent(userAgent),
+      userAgent,
+      acceptLanguage: req.headers.get('accept-language'),
+    });
+    stored = await insertEvents(rows);
+  } catch (e) {
+    // Never let enrichment break attribution ingestion below.
+    console.error('[collect] pm_events insert failed:', (e as Error).message);
+  }
+
   const mapped = mapBatch(batch);
   const ingested = {
     clickstream: await ingestSource('clickstream', mapped.clickstream),
@@ -168,5 +207,14 @@ export async function POST(req: Request) {
   const total = ingested.clickstream + ingested.identity + ingested.conversions;
   if (total > 0) scheduleRebuild();
 
-  return NextResponse.json({ data: { accepted: batch.events?.length ?? 0, ingested } }, { headers: cors });
+  return NextResponse.json({ data: { accepted: batch.events?.length ?? 0, stored, ingested } }, { headers: cors });
+}
+
+function hostOf(u: string | null): string | null {
+  if (!u) return null;
+  try {
+    return new URL(u).host || null;
+  } catch {
+    return null;
+  }
 }

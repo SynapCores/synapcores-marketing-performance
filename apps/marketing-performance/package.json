@@ -11,7 +11,8 @@
     "bootstrap": "node ./bin/bootstrap.mjs",
     "seed-demo": "node ./bin/seed-demo.mjs",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "rm -rf .test-build && tsc -p tsconfig.test.json && node --test .test-build/tests/*.test.js"
   },
   "dependencies": {
     "@synapcores/app-framework": "workspace:*",

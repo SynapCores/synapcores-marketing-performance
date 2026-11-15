@@ -28,8 +28,20 @@ export interface BeaconBatch {
   timestamp?: number;
   url?: string;
   referrer?: string;
+  title?: string;
   userAgent?: string;
-  viewport?: { width?: number; height?: number };
+  /** navigator.language, e.g. 'en-US'. */
+  language?: string | null;
+  /** IANA zone from Intl, e.g. 'America/New_York'. */
+  timezone?: string | null;
+  viewport?: { width?: number | null; height?: number | null };
+  screen?: { width?: number | null; height?: number | null };
+  /**
+   * End-user IP — honoured ONLY on the authenticated server-to-server path
+   * (sk_ key), where the request's own IP is the customer's server. Ignored
+   * for browser beacons, whose IP comes from the proxy-appended XFF hop.
+   */
+  ip?: string | null;
   events?: BeaconEvent[];
 }
 
