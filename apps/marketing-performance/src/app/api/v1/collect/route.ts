@@ -3,6 +3,7 @@ import { resolveBearerKey } from '@/lib/api-auth';
 import { isPixelId, resolvePixel, originAllowed } from '@/lib/pixels';
 import { mapBatch, type BeaconBatch } from '@/lib/collector';
 import { ingestSource, rebuildDerived } from '@/lib/warehouse';
+import { clientIp, makeLimiter } from '@/lib/security';
 
 export const runtime = 'nodejs';
 
@@ -37,23 +38,28 @@ export const runtime = 'nodejs';
  * valid key is still REQUIRED, so this is never an open relay.
  */
 
-// ── minimal token bucket (replaces express-rate-limit) ───────────────────────
-const WINDOW_MS = 60_000;
-const MAX_PER_WINDOW = 120; // batches per key per minute
-const buckets = new Map<string, { count: number; resetAt: number }>();
+// ── limits ──────────────────────────────────────────────────────────────────
+const MAX_BODY_BYTES = 64 * 1024; // a beacon batch is a few KB
+const MAX_EVENTS = 50; // events per batch
+const tenantLimited = makeLimiter(120, 60_000); // batches per workspace per minute
+const ipLimited = makeLimiter(30, 60_000); // batches per client IP per minute
 
-function rateLimited(key: string): boolean {
-  const now = Date.now();
-  const b = buckets.get(key);
-  if (!b || now > b.resetAt) {
-    buckets.set(key, { count: 1, resetAt: now + WINDOW_MS });
-    return false;
-  }
-  b.count += 1;
-  return b.count > MAX_PER_WINDOW;
+// Attribution + scorecard are full-table rebuilds: never run one per beacon.
+// Coalesce into at most one rebuild per REBUILD_EVERY_MS after new data lands.
+const REBUILD_EVERY_MS = Number(process.env.COLLECT_REBUILD_EVERY_MS ?? 5 * 60_000);
+let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleRebuild() {
+  if (rebuildTimer) return;
+  rebuildTimer = setTimeout(() => {
+    rebuildTimer = null;
+    rebuildDerived().catch(() => undefined);
+  }, REBUILD_EVERY_MS);
+  rebuildTimer.unref?.();
 }
 
 // ── CORS (the beacon runs on the customer's domain, not ours) ────────────────
+// No credentials are ever sent, so a wildcard is safe; an allow-listed pixel
+// gets its origin echoed only after the origin check passes.
 function corsHeaders(origin: string | null): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': origin ?? '*',
@@ -110,9 +116,22 @@ export async function POST(req: Request) {
   const origin = req.headers.get('origin');
   const cors = corsHeaders(origin);
 
+  if (ipLimited(clientIp(req))) {
+    return NextResponse.json({ error: { code: 'rate_limited', message: 'Too many batches; slow down.' } }, { status: 429, headers: cors });
+  }
+  const declared = Number(req.headers.get('content-length') ?? 0);
+  if (declared > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: { code: 'too_large', message: 'Batch too large.' } }, { status: 413, headers: cors });
+  }
+
   let batch: BeaconBatch;
   try {
-    batch = JSON.parse(await req.text()) as BeaconBatch;
+    const text = await req.text();
+    if (text.length > MAX_BODY_BYTES) throw new RangeError('too large');
+    batch = JSON.parse(text) as BeaconBatch;
+    if (!batch || typeof batch !== 'object') throw new TypeError('not an object');
+    if (batch.events !== undefined && !Array.isArray(batch.events)) throw new TypeError('events');
+    if (Array.isArray(batch.events) && batch.events.length > MAX_EVENTS) batch.events = batch.events.slice(0, MAX_EVENTS);
   } catch {
     return NextResponse.json({ error: { code: 'bad_body', message: 'Body must be a JSON beacon batch.' } }, { status: 400, headers: cors });
   }
@@ -134,7 +153,7 @@ export async function POST(req: Request) {
     );
   }
 
-  if (rateLimited(key.tenantId)) {
+  if (tenantLimited(key.tenantId)) {
     return NextResponse.json({ error: { code: 'rate_limited', message: 'Too many batches; slow down.' } }, { status: 429, headers: cors });
   }
 
@@ -147,9 +166,7 @@ export async function POST(req: Request) {
 
   // Keep attribution + scorecard current, but only when something landed.
   const total = ingested.clickstream + ingested.identity + ingested.conversions;
-  if (total > 0) {
-    try { await rebuildDerived(); } catch { /* base tables may be incomplete; ignore */ }
-  }
+  if (total > 0) scheduleRebuild();
 
   return NextResponse.json({ data: { accepted: batch.events?.length ?? 0, ingested } }, { headers: cors });
 }

@@ -1,6 +1,7 @@
 'use server';
 import { revalidatePath } from 'next/cache';
 import { requireSession } from './session';
+import { canWrite } from './security';
 import { createPixel, disablePixel, deletePixel, type TrackingPixel } from './pixels';
 
 const PIXELS_PATH = '/settings/pixels';
@@ -11,6 +12,7 @@ export async function createPixelAction(input: {
 }): Promise<{ ok: true; pixel: TrackingPixel } | { ok: false; error: string }> {
   const session = await requireSession();
   if (!session.tenant) return { ok: false, error: 'No workspace selected.' };
+  if (!canWrite(session)) return { ok: false, error: 'Only workspace owners and admins can manage pixels.' };
 
   const label = (input.label ?? '').trim();
   if (!label) return { ok: false, error: 'Give the pixel a label (e.g. the site it goes on).' };
@@ -36,6 +38,7 @@ export async function disablePixelAction(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const session = await requireSession();
   if (!session.tenant) return { ok: false, error: 'No workspace selected.' };
+  if (!canWrite(session)) return { ok: false, error: 'Only workspace owners and admins can manage pixels.' };
   await disablePixel(session.tenant.id, id);
   revalidatePath(PIXELS_PATH);
   return { ok: true };
@@ -46,6 +49,7 @@ export async function deletePixelAction(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const session = await requireSession();
   if (!session.tenant) return { ok: false, error: 'No workspace selected.' };
+  if (!canWrite(session)) return { ok: false, error: 'Only workspace owners and admins can manage pixels.' };
   await deletePixel(session.tenant.id, id);
   revalidatePath(PIXELS_PATH);
   return { ok: true };

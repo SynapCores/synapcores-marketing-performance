@@ -35,6 +35,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ source: string
   let records: Array<Record<string, unknown>> = [];
   const ct = req.headers.get('content-type') ?? '';
   const text = await req.text();
+  if (text.length > 10 * 1024 * 1024) {
+    return NextResponse.json({ error: { code: 'too_large', message: 'Body over 10 MB; split the load into batches.' } }, { status: 413 });
+  }
   try {
     if (ct.includes('ndjson') || ct.includes('text/plain')) {
       records = text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => JSON.parse(l));

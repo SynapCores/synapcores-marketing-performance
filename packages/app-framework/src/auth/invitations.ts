@@ -104,9 +104,9 @@ export async function listPendingInvites(
   return result.rows;
 }
 
-export async function revokeInvitation(invitationId: string): Promise<void> {
+export async function revokeInvitation(invitationId: string, tenantId: string): Promise<void> {
   const db = getAdminClient();
-  await db.sql(`DELETE FROM invitations WHERE id = $1`, [invitationId]);
+  await db.sql(`DELETE FROM invitations WHERE id = $1 AND tenant_id = $2`, [invitationId, tenantId]);
 }
 
 /**
