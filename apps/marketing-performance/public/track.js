@@ -28,6 +28,10 @@
     sessionTimeout: 30, // minutes
     batchSize: 10,
     batchInterval: 2000, // ms
+    maxQueue: 500, // events held in memory; oldest are dropped beyond this
+    retryBaseMs: 2000, // first retry delay after a failed batch (doubles each time)
+    retryMaxMs: 300000, // backoff cap (5 min)
+    maxPermanentFailures: 3, // consecutive 4xx (not 429) before the tracker stops sending for this page view
     debug: false,
     automaticEvents: true,
     s2sEndpoint: null, // Disabled by default
@@ -57,6 +61,11 @@
     userId: null,
     sessionId: null,
     eventQueue: [],
+    inFlight: false, // a batch request is outstanding
+    failures: 0, // consecutive failed batches (drives the backoff)
+    permanentFailures: 0, // consecutive non-retryable (4xx) rejections
+    retryAt: 0, // epoch ms before which no batch is sent
+    disabled: false, // collector keeps rejecting us (bad pixel id / origin) — stop for this page view
     lastActivity: Date.now(),
     initialized: false,
     currentPage: {
@@ -67,6 +76,29 @@
     },
     viewedProducts: new Set(), // Ensure products are tracked only once per page view
     cart: [] // Maintain a simple cart state
+  };
+  
+  // Delivery policy (pure; exposed as EcommTracker._delivery for tests).
+  const delivery = {
+    // Network errors (status 0), timeouts, rate limiting and server errors are
+    // worth retrying; any other 4xx means this batch will never be accepted.
+    retryable: function(status) {
+      return status === 0 || status === 408 || status === 429 || status >= 500;
+    },
+    // Exponential backoff with jitter: base·2^(n-1), capped, scaled into
+    // [50%, 100%]. A server Retry-After (seconds) is honoured up to the cap.
+    delayMs: function(failures, retryAfter, cfg, rand) {
+      const n = Math.max(1, failures);
+      const exp = Math.min(cfg.retryMaxMs, cfg.retryBaseMs * Math.pow(2, n - 1));
+      let ms = Math.round(exp * (0.5 + 0.5 * (typeof rand === 'number' ? rand : 1)));
+      const ra = parseInt(retryAfter, 10);
+      if (ra > 0) ms = Math.max(ms, Math.min(cfg.retryMaxMs, ra * 1000));
+      return ms;
+    },
+    // Keep at most `max` events, dropping the oldest.
+    capQueue: function(queue, max) {
+      return queue.length > max ? queue.slice(queue.length - max) : queue;
+    }
   };
   
   // Utility functions
@@ -959,9 +991,13 @@
     },
     
     processEvents: function(forceAll = false) {
-      if (state.eventQueue.length === 0) return;
+      if (state.disabled || state.eventQueue.length === 0) return;
+      // One request at a time, and nothing while backing off — except the
+      // final flush on page exit, which is the last chance to deliver.
+      if (!forceAll && (state.inFlight || Date.now() < state.retryAt)) return;
       
-      const eventsToProcess = forceAll ? state.eventQueue : state.eventQueue.slice(0, config.batchSize);
+      // The collector accepts at most 50 events per batch.
+      const eventsToProcess = state.eventQueue.slice(0, forceAll ? 50 : config.batchSize);
       
       if (eventsToProcess.length === 0) return;
       
@@ -988,12 +1024,38 @@
       };
       
       // Send the payload to the server
+      const removeSent = function() {
+        // Remove exactly the events that were in this batch (the queue may
+        // have been trimmed or appended to while the request was in flight).
+        state.eventQueue = state.eventQueue.filter(function(e) { return eventsToProcess.indexOf(e) === -1; });
+      };
+      state.inFlight = true;
       this.sendPayload(payload).then(function() {
-        // Remove processed events from the queue
-        state.eventQueue = state.eventQueue.slice(eventsToProcess.length);
+        state.inFlight = false;
+        removeSent();
+        state.failures = 0;
+        state.permanentFailures = 0;
+        state.retryAt = 0;
         utils.log('Processed events', eventsToProcess.length);
       }).catch(function(error) {
-        utils.log('Error processing events', error);
+        state.inFlight = false;
+        const status = error && typeof error.status === 'number' ? error.status : 0;
+        state.failures += 1;
+        if (!delivery.retryable(status)) {
+          // 400/401/403/404/413…: resending the same batch can never succeed.
+          removeSent();
+          state.permanentFailures += 1;
+          if (state.permanentFailures >= config.maxPermanentFailures) {
+            state.disabled = true;
+            state.eventQueue = [];
+            utils.log('Collector keeps rejecting events (HTTP ' + status + '); tracking paused for this page view');
+            return;
+          }
+        } else {
+          state.permanentFailures = 0;
+        }
+        state.retryAt = Date.now() + delivery.delayMs(state.failures, error && error.retryAfter, config, Math.random());
+        utils.log('Error processing events; next attempt in ' + Math.round((state.retryAt - Date.now()) / 1000) + 's', error);
       });
     },
     
@@ -1010,7 +1072,8 @@
             reject({
               status: xhr.status,
               statusText: xhr.statusText,
-              response: xhr.response
+              response: xhr.response,
+              retryAfter: xhr.getResponseHeader ? xhr.getResponseHeader('Retry-After') : null
             });
           }
         };
@@ -1083,7 +1146,9 @@
       queryParams: utils.getQueryParams()
     };
     
+    if (state.disabled) return this;
     state.eventQueue.push(event);
+    state.eventQueue = delivery.capQueue(state.eventQueue, config.maxQueue);
     utils.log('Event queued', event);
     
     // If it's a standard e-commerce event, also relay to S2S endpoints
@@ -1160,6 +1225,7 @@
     },
     version: '2.0.0'
   };
+  EcommTracker._delivery = delivery;
   
   // Auto-initialize if script has data-auto-init attribute
   const currentScript = document.currentScript;
