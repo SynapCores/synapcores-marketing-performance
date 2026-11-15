@@ -135,15 +135,17 @@ export async function listVisitors(tenantId: string, f: VisitorFilters, limit = 
   const ids = agg.rows.map((r) => String(r.anonymous_id));
   if (!ids.length) return [];
   const inList = placeholders(2, ids.length);
+  // NB: tenant_id must be in the inner projection — SynapCores CE applies the
+  // inner WHERE after projecting a window-function subquery.
   const latest = await db().sql<Row>(
-    `SELECT * FROM (SELECT anonymous_id, ip, ip_truncated, country, country_name, region, city, browser, browser_version, os,
+    `SELECT * FROM (SELECT tenant_id, anonymous_id, ip, ip_truncated, country, country_name, region, city, browser, browser_version, os,
             device_type, bot_name, bot_category, site,
             ROW_NUMBER() OVER (PARTITION BY anonymous_id ORDER BY occurred_at DESC) AS rn
        FROM pm_events WHERE tenant_id = $1 AND anonymous_id IN (${inList})) z WHERE rn = 1`,
     [tenantId, ...ids],
   );
   const first = await db().sql<Row>(
-    `SELECT * FROM (SELECT anonymous_id, site, page_path, referrer_domain, utm_source, utm_medium, gclid, fbclid, ttclid, msclkid,
+    `SELECT * FROM (SELECT tenant_id, anonymous_id, site, page_path, referrer_domain, utm_source, utm_medium, gclid, fbclid, ttclid, msclkid,
             ROW_NUMBER() OVER (PARTITION BY anonymous_id ORDER BY occurred_at ASC) AS rn
        FROM pm_events WHERE tenant_id = $1 AND anonymous_id IN (${inList})) z WHERE rn = 1`,
     [tenantId, ...ids],
