@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { AppPageHeader, Card, CardContent, DataTable, type DataTableColumn } from '@synapcores/app-framework';
 import { requireSession } from '@/lib/session';
@@ -29,7 +28,8 @@ export default async function TableBrowsePage({ params }: { params: Promise<{ ta
     <div className="space-y-6">
       <AppPageHeader
         title={meta?.label ?? table}
-        description={<>{meta?.desc} · <span className="text-muted-foreground">{rows.length.toLocaleString()} rows shown</span> · <Link href="/tables" className="underline">all tables</Link></>}
+        back={{ href: '/tables', label: 'Data Tables' }}
+        description={<>{meta?.desc} · <span className="text-muted-foreground">{rows.length.toLocaleString()} rows shown</span></>}
       />
       <Card>
         <CardContent className="overflow-x-auto pt-6">

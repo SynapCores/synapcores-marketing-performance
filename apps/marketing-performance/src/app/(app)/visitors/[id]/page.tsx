@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { AppPageHeader, Card, CardContent, CardDescription, CardHeader, CardTitle } from '@synapcores/app-framework';
 import { requireSession } from '@/lib/session';
@@ -69,7 +68,8 @@ export default async function VisitorDetailPage({ params }: { params: Promise<{ 
     <div className="space-y-6">
       <AppPageHeader
         title={`Visitor ${anonymousId.slice(0, 8)}…`}
-        description={<><Link href="/visitors" className="underline">← all visitors</Link> · {GEO_ATTRIBUTION}</>}
+        back={{ href: '/visitors', label: 'Visitors' }}
+        description={GEO_ATTRIBUTION}
       />
 
       <Card>

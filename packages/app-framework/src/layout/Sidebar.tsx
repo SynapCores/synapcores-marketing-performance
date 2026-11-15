@@ -33,7 +33,6 @@ export function Sidebar({
   sections: SidebarSection[];
   brand: { label: string; href: string };
 }) {
-  const pathname = usePathname();
   return (
     <aside className="hidden md:flex md:flex-col w-60 shrink-0 border-r border-border bg-card">
       <div className="h-14 flex items-center px-5 border-b border-border">
@@ -45,45 +44,72 @@ export function Sidebar({
         </Link>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
-        {sections.map((section, sIdx) => (
-          <div key={section.heading ?? `s${sIdx}`}>
-            {section.heading && (
-              <h3 className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                {section.heading}
-              </h3>
-            )}
-            <ul className="space-y-1">
-              {section.items.map((it) => {
-                const active =
-                  pathname === it.href || pathname.startsWith(`${it.href}/`);
-                return (
-                  <li key={it.href}>
-                    <Link
-                      href={it.href}
-                      className={cn(
-                        'flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors',
-                        active
-                          ? 'bg-primary/10 text-primary'
-                          : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                      )}
-                    >
-                      {it.icon}
-                      <span className="flex-1 truncate">{it.label}</span>
-                      {it.badge !== undefined && (
-                        <span className="text-xs px-1.5 py-0.5 rounded-full bg-primary/15 text-primary">
-                          {it.badge}
-                        </span>
-                      )}
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))}
-      </nav>
+      <SidebarNav sections={sections} />
     </aside>
+  );
+}
+
+/**
+ * The nav link list shared by the desktop sidebar and the mobile drawer
+ * (MobileNav), so both always show the same items.
+ */
+export function SidebarNav({
+  sections,
+  onNavigate,
+  className,
+  ariaLabel = 'Main',
+}: {
+  sections: SidebarSection[];
+  /** Called when a link is activated (the mobile drawer closes on it). */
+  onNavigate?: () => void;
+  className?: string;
+  ariaLabel?: string;
+}) {
+  const pathname = usePathname() ?? '';
+  return (
+    <nav
+      aria-label={ariaLabel}
+      className={cn('flex-1 overflow-y-auto px-3 py-4 space-y-6', className)}
+    >
+      {sections.map((section, sIdx) => (
+        <div key={section.heading ?? `s${sIdx}`}>
+          {section.heading && (
+            <h3 className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {section.heading}
+            </h3>
+          )}
+          <ul className="space-y-1">
+            {section.items.map((it) => {
+              const active =
+                pathname === it.href || pathname.startsWith(`${it.href}/`);
+              return (
+                <li key={it.href}>
+                  <Link
+                    href={it.href}
+                    aria-current={active ? 'page' : undefined}
+                    onClick={onNavigate}
+                    className={cn(
+                      'flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors',
+                      active
+                        ? 'bg-primary/10 text-primary'
+                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                    )}
+                  >
+                    {it.icon}
+                    <span className="flex-1 truncate">{it.label}</span>
+                    {it.badge !== undefined && (
+                      <span className="text-xs px-1.5 py-0.5 rounded-full bg-primary/15 text-primary">
+                        {it.badge}
+                      </span>
+                    )}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
+    </nav>
   );
 }
 
