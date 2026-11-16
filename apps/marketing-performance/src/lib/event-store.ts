@@ -1,6 +1,8 @@
 import 'server-only';
 import { getAdminClient } from '@synapcores/app-framework/db/server';
-import { PM_EVENTS_DDL, PM_EVENT_COLUMNS, sqlTs, type PmEventRow } from './visitor/events';
+import { PM_EVENTS_ADDED_COLUMNS, PM_EVENTS_DDL, PM_EVENT_COLUMNS, sqlTs, type PmEventRow } from './visitor/events';
+import { CLASSIFIER_VERSION, classifyVisitor, type Classification } from './visitor/classify';
+import type { CrawlerMatcher } from './visitor/crawler-ranges';
 import { retentionCutoff, retentionDays, truncationSql } from './visitor/retention';
 import { visitorSource } from './visitor/source';
 
@@ -20,6 +22,13 @@ export function ensureEventsTable(): Promise<void> {
   if (!ensured) {
     ensured = (async () => {
       for (const ddl of PM_EVENTS_DDL) await db().sql(ddl);
+      for (const [col, type] of PM_EVENTS_ADDED_COLUMNS) {
+        try {
+          await db().sql(`SELECT ${col} FROM pm_events LIMIT 1`);
+        } catch {
+          await db().sql(`ALTER TABLE pm_events ADD COLUMN ${col} ${type}`);
+        }
+      }
     })().catch((e) => {
       ensured = null;
       throw e;
@@ -76,8 +85,6 @@ function whereClause(tenantId: string, f: VisitorFilters): { sql: string; params
     params.push(v);
     parts.push(cond.replace('?', `$${params.length}`));
   };
-  if (f.kind === 'bot') parts.push('is_bot = TRUE');
-  if (f.kind === 'human') parts.push('is_bot = FALSE');
   if (f.site) add('site = ?', f.site);
   if (f.country) add('country = ?', f.country.toUpperCase());
   if (f.from && DAY.test(f.from)) add('occurred_at >= ?', `${f.from} 00:00:00`);
@@ -96,6 +103,7 @@ export interface VisitorSummary {
   is_bot: boolean;
   bot_name: string | null;
   bot_category: string | null;
+  bot_verified: string | null;
   ip: string | null;
   ip_truncated: boolean;
   country: string | null;
@@ -122,6 +130,10 @@ export async function listVisitors(tenantId: string, f: VisitorFilters, limit = 
   await ensureEventsTable();
   const w = whereClause(tenantId, f);
   const lim = Math.max(1, Math.min(500, Math.floor(limit)));
+  // A visitor is a bot if ANY of its events is (a crawler that once sent a
+  // browser-looking UA must not show up under "humans").
+  const anyBot = 'MAX(CASE WHEN is_bot = TRUE THEN 1 ELSE 0 END)';
+  const having = f.kind === 'bot' ? ` HAVING ${anyBot} = 1` : f.kind === 'human' ? ` HAVING ${anyBot} = 0` : '';
   const agg = await db().sql<Row>(
     `SELECT anonymous_id, MIN(occurred_at) AS first_seen, MAX(occurred_at) AS last_seen, COUNT(*) AS events,
             COUNT(DISTINCT session_id) AS sessions,
@@ -129,7 +141,7 @@ export async function listVisitors(tenantId: string, f: VisitorFilters, limit = 
             COUNT(DISTINCT page_path) AS pages,
             MAX(CASE WHEN is_bot = TRUE THEN 1 ELSE 0 END) AS any_bot
        FROM pm_events WHERE ${w.sql}
-      GROUP BY anonymous_id ORDER BY last_seen DESC LIMIT ${lim}`,
+      GROUP BY anonymous_id${having} ORDER BY last_seen DESC LIMIT ${lim}`,
     w.params,
   );
   const ids = agg.rows.map((r) => String(r.anonymous_id));
@@ -139,8 +151,8 @@ export async function listVisitors(tenantId: string, f: VisitorFilters, limit = 
   // inner WHERE after projecting a window-function subquery.
   const latest = await db().sql<Row>(
     `SELECT * FROM (SELECT tenant_id, anonymous_id, ip, ip_truncated, country, country_name, region, city, browser, browser_version, os,
-            device_type, bot_name, bot_category, site,
-            ROW_NUMBER() OVER (PARTITION BY anonymous_id ORDER BY occurred_at DESC) AS rn
+            device_type, is_bot, bot_name, bot_category, bot_verified, site,
+            ROW_NUMBER() OVER (PARTITION BY anonymous_id ORDER BY is_bot DESC, occurred_at DESC) AS rn
        FROM pm_events WHERE tenant_id = $1 AND anonymous_id IN (${inList})) z WHERE rn = 1`,
     [tenantId, ...ids],
   );
@@ -167,6 +179,7 @@ export async function listVisitors(tenantId: string, f: VisitorFilters, limit = 
       is_bot: Number(a.any_bot ?? 0) > 0,
       bot_name: asStr(l.bot_name),
       bot_category: asStr(l.bot_category),
+      bot_verified: asStr(l.bot_verified),
       ip: asStr(l.ip),
       ip_truncated: asBool(l.ip_truncated),
       country: asStr(l.country),
@@ -216,7 +229,7 @@ export interface VisitorBreakdown {
   humans: { visitors: number; events: number };
   bots: { visitors: number; events: number };
   countries: Array<{ country: string; country_name: string; visitors: number }>;
-  bots_by_name: Array<{ bot_name: string; bot_category: string; events: number }>;
+  bots_by_name: Array<{ bot_name: string; bot_category: string; bot_verified: string | null; events: number }>;
 }
 
 export async function visitorBreakdown(tenantId: string, days = 30): Promise<VisitorBreakdown> {
@@ -234,20 +247,91 @@ export async function visitorBreakdown(tenantId: string, days = 30): Promise<Vis
     [tenantId, since],
   );
   const bots = await db().sql<Row>(
-    `SELECT bot_name, bot_category, COUNT(*) AS events
+    `SELECT bot_name, bot_category, bot_verified, COUNT(*) AS events
        FROM pm_events WHERE tenant_id = $1 AND occurred_at >= $2 AND is_bot = TRUE
-      GROUP BY bot_name, bot_category ORDER BY events DESC LIMIT 10`,
+      GROUP BY bot_name, bot_category, bot_verified ORDER BY events DESC LIMIT 10`,
     [tenantId, since],
   );
-  const pick = (bot: boolean) => {
-    const r = split.rows.find((x) => asBool(x.is_bot) === bot);
-    return { visitors: Number(r?.visitors ?? 0), events: Number(r?.events ?? 0) };
-  };
+  // A visitor with any bot event is a bot; humans = everyone else (no double count).
+  const totals = await db().sql<Row>(
+    `SELECT COUNT(DISTINCT anonymous_id) AS visitors FROM pm_events WHERE tenant_id = $1 AND occurred_at >= $2`,
+    [tenantId, since],
+  );
+  const events = (bot: boolean) => Number(split.rows.find((x) => asBool(x.is_bot) === bot)?.events ?? 0);
+  const botVisitors = Number(split.rows.find((x) => asBool(x.is_bot))?.visitors ?? 0);
+  const allVisitors = Number(totals.rows[0]?.visitors ?? 0);
   return {
     since,
-    humans: pick(false),
-    bots: pick(true),
+    humans: { visitors: Math.max(0, allVisitors - botVisitors), events: events(false) },
+    bots: { visitors: botVisitors, events: events(true) },
     countries: countries.rows.map((r) => ({ country: String(r.country), country_name: String(r.country_name ?? r.country), visitors: Number(r.visitors ?? 0) })),
-    bots_by_name: bots.rows.map((r) => ({ bot_name: String(r.bot_name ?? 'Unknown'), bot_category: String(r.bot_category ?? 'other'), events: Number(r.events ?? 0) })),
+    bots_by_name: bots.rows.map((r) => ({ bot_name: String(r.bot_name ?? 'Unknown'), bot_category: String(r.bot_category ?? 'other'), bot_verified: asStr(r.bot_verified), events: Number(r.events ?? 0) })),
   };
+}
+
+// ── reclassification (backfill) ──────────────────────────────────────────────
+export interface ReclassifyResult {
+  scanned: number;
+  changed: number;
+  before: { human: number; bot: number };
+  after: { human: number; bot: number };
+}
+
+async function botSplit(): Promise<{ human: number; bot: number }> {
+  const r = await db().sql<Row>(`SELECT is_bot, COUNT(*) AS n FROM pm_events GROUP BY is_bot`);
+  const n = (b: boolean) => Number(r.rows.find((x) => asBool(x.is_bot) === b)?.n ?? 0);
+  return { human: n(false), bot: n(true) };
+}
+
+const sameVerdict = (r: Row, c: Classification) =>
+  asBool(r.is_bot) === c.isBot && asStr(r.bot_name) === c.botName && asStr(r.bot_category) === c.botCategory &&
+  asStr(r.bot_verified) === c.botVerified && asStr(r.device_type) === c.deviceType;
+
+/**
+ * Re-run the classifier (UA + crawler IP ranges) over stored events whose
+ * `bot_rules_version` is older than CLASSIFIER_VERSION (or missing). Rows are
+ * grouped by verdict and updated with one statement per verdict per batch.
+ * Idempotent: every scanned row is stamped with the current version.
+ */
+export async function reclassifyEvents(matcher: CrawlerMatcher, batchSize = 500): Promise<ReclassifyResult> {
+  await ensureEventsTable();
+  const before = await botSplit();
+  let scanned = 0;
+  let changed = 0;
+  const seen = new Set<string>();
+  for (let guard = 0; guard < 10_000; guard++) {
+    const res = await db().sql<Row>(
+      `SELECT event_id, user_agent, ip, is_bot, bot_name, bot_category, bot_verified, device_type
+         FROM pm_events WHERE bot_rules_version IS NULL OR bot_rules_version < ${CLASSIFIER_VERSION} LIMIT ${batchSize}`,
+    );
+    if (!res.rows.length) break;
+    if (res.rows.some((r) => seen.has(String(r.event_id)))) throw new Error('reclassify: UPDATE did not persist; stopping');
+    for (const r of res.rows) seen.add(String(r.event_id));
+    const groups = new Map<string, { c: Classification; ids: string[] }>();
+    const stampOnly: string[] = [];
+    for (const r of res.rows) {
+      const c = classifyVisitor(asStr(r.user_agent), asStr(r.ip), matcher);
+      if (sameVerdict(r, c)) {
+        stampOnly.push(String(r.event_id));
+        continue;
+      }
+      const k = JSON.stringify([c.isBot, c.botName, c.botCategory, c.botVerified, c.deviceType]);
+      const g = groups.get(k) ?? { c, ids: [] };
+      g.ids.push(String(r.event_id));
+      groups.set(k, g);
+    }
+    for (const { c, ids } of groups.values()) {
+      await db().sql(
+        `UPDATE pm_events SET is_bot = ${lit(c.isBot)}, bot_name = ${lit(c.botName)}, bot_category = ${lit(c.botCategory)},
+                bot_verified = ${lit(c.botVerified)}, device_type = ${lit(c.deviceType)}, bot_rules_version = ${CLASSIFIER_VERSION}
+          WHERE event_id IN (${ids.map(lit).join(',')})`,
+      );
+      changed += ids.length;
+    }
+    if (stampOnly.length) {
+      await db().sql(`UPDATE pm_events SET bot_rules_version = ${CLASSIFIER_VERSION} WHERE event_id IN (${stampOnly.map(lit).join(',')})`);
+    }
+    scanned += res.rows.length;
+  }
+  return { scanned, changed, before, after: await botSplit() };
 }

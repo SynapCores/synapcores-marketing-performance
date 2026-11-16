@@ -9,7 +9,8 @@ import { buildEventRows } from '@/lib/visitor/events';
 import { lookupGeo } from '@/lib/visitor/geo';
 import { clientIpFromHeaders, normalizeIp } from '@/lib/visitor/ip';
 import { mustDropForPrivacy } from '@/lib/visitor/privacy';
-import { parseUserAgent } from '@/lib/visitor/ua';
+import { classifyVisitor } from '@/lib/visitor/classify';
+import { getCrawlerMatcher } from '@/lib/visitor/crawler-ranges-store';
 
 export const runtime = 'nodejs';
 
@@ -186,7 +187,7 @@ export async function POST(req: Request) {
       sourceKind: key.kind,
       ip,
       geo: lookupGeo(ip),
-      ua: parseUserAgent(userAgent),
+      ua: classifyVisitor(userAgent, ip, getCrawlerMatcher()),
       userAgent,
       acceptLanguage: req.headers.get('accept-language'),
     });

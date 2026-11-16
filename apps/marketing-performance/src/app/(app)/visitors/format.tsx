@@ -1,4 +1,5 @@
 /** Shared display helpers for the Visitors pages and the dashboard card. */
+import { botLabel } from '@/lib/visitor/classify';
 
 export function flag(cc: string | null | undefined): string {
   if (!cc || !/^[A-Za-z]{2}$/.test(cc)) return '';
@@ -16,15 +17,15 @@ export function when(ts: unknown): string {
   return `${s} UTC`;
 }
 
-export function BotBadge({ isBot, name, category }: { isBot: boolean; name?: string | null; category?: string | null }) {
+export function BotBadge({ isBot, name, category, verified }: { isBot: boolean; name?: string | null; category?: string | null; verified?: string | null }) {
   if (!isBot) return <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-medium text-emerald-500">human</span>;
   const ai = category === 'ai';
   return (
     <span
-      title={category ? `${category} bot` : 'bot'}
+      title={(category ? `${category} bot` : 'bot') + (verified === 'verified' ? ' — IP is in the operator\'s published crawler ranges' : verified === 'unverified' ? ' — IP is NOT in the operator\'s published ranges (likely spoofed)' : '')}
       className={'rounded px-1.5 py-0.5 text-[11px] font-medium ' + (ai ? 'bg-violet-500/15 text-violet-400' : 'bg-amber-500/15 text-amber-500')}
     >
-      {ai ? 'AI bot' : 'bot'}{name ? ` · ${name}` : ''}
+      {ai ? 'AI bot' : 'bot'}{name || verified ? ` · ${botLabel(name ?? null, verified)}` : ''}
     </span>
   );
 }

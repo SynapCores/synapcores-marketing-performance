@@ -37,6 +37,7 @@ export default async function VisitorDetailPage({ params }: { params: Promise<{ 
   const first = events[0]!;
   const last = events[events.length - 1]!;
   const isBot = events.some((e) => isTrue(e.is_bot));
+  const botRow = [...events].reverse().find((e) => isTrue(e.is_bot)) ?? last;
   const ips = Array.from(new Set(events.map((e) => s(e.ip)).filter(Boolean))) as string[];
 
   // Group the timeline by session, in order of first appearance.
@@ -49,7 +50,7 @@ export default async function VisitorDetailPage({ params }: { params: Promise<{ 
 
   const facts: Array<[string, React.ReactNode]> = [
     ['Visitor id', <span key="id" className="font-mono text-xs">{anonymousId}</span>],
-    ['Type', <BotBadge key="b" isBot={isBot} name={s(last.bot_name)} category={s(last.bot_category)} />],
+    ['Type', <BotBadge key="b" isBot={isBot} name={s(botRow.bot_name)} category={s(botRow.bot_category)} verified={s(botRow.bot_verified)} />],
     ['Location', <span key="l">{flag(s(last.country))} {place({ city: s(last.city), region: s(last.region), country: s(last.country), country_name: s(last.country_name) })}</span>],
     ['IP address', <span key="ip" className="font-mono text-xs">{ips.join(', ') || '—'}{isTrue(last.ip_truncated) ? ' (truncated after retention window)' : ''}</span>],
     ['Time zone · language', `${s(last.timezone) ?? '—'} · ${s(last.language) ?? '—'}`],

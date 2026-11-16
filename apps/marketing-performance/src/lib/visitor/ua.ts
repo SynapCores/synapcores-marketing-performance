@@ -9,6 +9,8 @@
  * Pure function, unit tested in tests/visitor.test.ts.
  */
 
+import type { CrawlerOperator } from './crawler-ranges';
+
 export type BotCategory = 'ai' | 'search' | 'social' | 'seo' | 'monitor' | 'tool' | 'headless' | 'other';
 export type DeviceType = 'desktop' | 'mobile' | 'tablet' | 'tv' | 'console' | 'bot' | 'unknown';
 
@@ -29,23 +31,24 @@ export interface ParsedUA {
  * and Applebot-Extended are robots.txt tokens, not UAs, but we match them in case
  * a crawler ever announces them.
  */
-const BOTS: Array<[RegExp, string, BotCategory]> = [
+type BotRule = [RegExp, string, BotCategory, CrawlerOperator?];
+const BOTS: BotRule[] = [
   // — AI crawlers, answer engines and agents —
-  [/GPTBot/i, 'GPTBot (OpenAI)', 'ai'],
-  [/ChatGPT-User/i, 'ChatGPT-User (OpenAI)', 'ai'],
-  [/OAI-SearchBot/i, 'OAI-SearchBot (OpenAI)', 'ai'],
-  [/ChatGPT[- ]Agent/i, 'ChatGPT Agent (OpenAI)', 'ai'],
-  [/ClaudeBot/i, 'ClaudeBot (Anthropic)', 'ai'],
-  [/Claude-User/i, 'Claude-User (Anthropic)', 'ai'],
-  [/Claude-SearchBot/i, 'Claude-SearchBot (Anthropic)', 'ai'],
-  [/Claude-Web|anthropic-ai/i, 'Claude-Web (Anthropic)', 'ai'],
-  [/PerplexityBot/i, 'PerplexityBot', 'ai'],
-  [/Perplexity-User/i, 'Perplexity-User', 'ai'],
-  [/Google-Extended/i, 'Google-Extended', 'ai'],
-  [/Google-CloudVertexBot/i, 'Google-CloudVertexBot', 'ai'],
-  [/GoogleAgent|Google-Agent|Gemini-Deep-Research/i, 'Google AI Agent', 'ai'],
-  [/Applebot-Extended/i, 'Applebot-Extended', 'ai'],
-  [/CCBot/i, 'CCBot (Common Crawl)', 'ai'],
+  [/GPTBot/i, 'GPTBot (OpenAI)', 'ai', 'openai'],
+  [/ChatGPT-User/i, 'ChatGPT-User (OpenAI)', 'ai', 'openai'],
+  [/OAI-SearchBot/i, 'OAI-SearchBot (OpenAI)', 'ai', 'openai'],
+  [/ChatGPT[- ]Agent/i, 'ChatGPT Agent (OpenAI)', 'ai', 'openai'],
+  [/ClaudeBot/i, 'ClaudeBot (Anthropic)', 'ai', 'anthropic'],
+  [/Claude-User/i, 'Claude-User (Anthropic)', 'ai', 'anthropic'],
+  [/Claude-SearchBot/i, 'Claude-SearchBot (Anthropic)', 'ai', 'anthropic'],
+  [/Claude-Web|anthropic-ai/i, 'Claude-Web (Anthropic)', 'ai', 'anthropic'],
+  [/PerplexityBot/i, 'PerplexityBot', 'ai', 'perplexity'],
+  [/Perplexity-User/i, 'Perplexity-User', 'ai', 'perplexity'],
+  [/Google-Extended/i, 'Google-Extended', 'ai', 'google'],
+  [/Google-CloudVertexBot/i, 'Google-CloudVertexBot', 'ai', 'google'],
+  [/GoogleAgent|Google-Agent|Gemini-Deep-Research|Google-NotebookLM/i, 'Google AI Agent', 'ai', 'google'],
+  [/Applebot-Extended/i, 'Applebot-Extended', 'ai', 'apple'],
+  [/CCBot/i, 'CCBot (Common Crawl)', 'ai', 'commoncrawl'],
   [/Bytespider/i, 'Bytespider (ByteDance)', 'ai'],
   [/meta-externalagent/i, 'Meta-ExternalAgent', 'ai'],
   [/meta-externalfetcher/i, 'Meta-ExternalFetcher', 'ai'],
@@ -70,13 +73,27 @@ const BOTS: Array<[RegExp, string, BotCategory]> = [
   [/Novellum|QualifiedBot|Brightbot/i, 'AI data crawler', 'ai'],
 
   // — search engines —
-  [/Googlebot-Image/i, 'Googlebot-Image', 'search'],
-  [/Googlebot/i, 'Googlebot', 'search'],
-  [/Google-InspectionTool/i, 'Google-InspectionTool', 'search'],
-  [/Storebot-Google|AdsBot-Google|Mediapartners-Google|APIs-Google|FeedFetcher-Google|Google-Read-Aloud|Google Favicon/i, 'Google (service)', 'search'],
-  [/bingbot|BingPreview|msnbot|adidxbot/i, 'Bingbot', 'search'],
-  [/Applebot/i, 'Applebot', 'search'],
-  [/DuckDuckBot|DuckDuckGo-Favicons-Bot/i, 'DuckDuckBot', 'search'],
+  // Google: every token Google documents for its crawlers and fetchers. The
+  // smartphone Googlebot / GoogleOther UAs look like Chrome on a Nexus 5X, so
+  // the token is the only UA tell (the IP check in classify.ts is the backstop).
+  [/Google-InspectionTool/i, 'Google-InspectionTool', 'search', 'google'],
+  [/Googlebot-Image/i, 'Googlebot-Image', 'search', 'google'],
+  [/Googlebot-Video/i, 'Googlebot-Video', 'search', 'google'],
+  [/Googlebot-News/i, 'Googlebot-News', 'search', 'google'],
+  [/Googlebot/i, 'Googlebot', 'search', 'google'],
+  [/GoogleOther/i, 'GoogleOther', 'search', 'google'],
+  [/AdsBot-Google/i, 'AdsBot-Google', 'search', 'google'],
+  [/Mediapartners-Google/i, 'Mediapartners-Google (AdSense)', 'search', 'google'],
+  [/APIs-Google/i, 'APIs-Google', 'search', 'google'],
+  [/FeedFetcher-Google/i, 'FeedFetcher-Google', 'search', 'google'],
+  [/Storebot-Google/i, 'Storebot-Google', 'search', 'google'],
+  [/Google-Site-Verification/i, 'Google-Site-Verification', 'other', 'google'],
+  [/Google-Read-Aloud/i, 'Google-Read-Aloud', 'other', 'google'],
+  [/Google-Safety/i, 'Google-Safety', 'other', 'google'],
+  [/GoogleProducer|Google-PageRenderer|Google-Structured-Data|Google-Test|Google Favicon|Google Web Preview|Google-Adwords|DuplexWeb-Google|Google-Apps-Script|Google-Firebase/i, 'Google (service)', 'other', 'google'],
+  [/bingbot|BingPreview|msnbot|adidxbot|MicrosoftPreview/i, 'Bingbot', 'search', 'bing'],
+  [/Applebot/i, 'Applebot', 'search', 'apple'],
+  [/DuckDuckBot|DuckDuckGo-Favicons-Bot/i, 'DuckDuckBot', 'search', 'duckduckgo'],
   [/YandexBot|YandexImages|YandexMobileBot|Yandex(?:[A-Z][a-z]+)+\//, 'YandexBot', 'search'],
   [/Baiduspider/i, 'Baiduspider', 'search'],
   [/Sogou/i, 'Sogou', 'search'],
@@ -120,17 +137,25 @@ const BOTS: Array<[RegExp, string, BotCategory]> = [
   // — headless / automation —
   [/HeadlessChrome/i, 'HeadlessChrome', 'headless'],
   [/PhantomJS/i, 'PhantomJS', 'headless'],
-  [/Puppeteer|Playwright|Selenium|webdriver|Cypress/i, 'Browser automation', 'headless'],
+  [/Puppeteer|Playwright|Selenium|webdriver|Cypress|Electron\/|SlimerJS|jsdom/i, 'Browser automation', 'headless'],
 
   // — scripted HTTP clients —
   [/^curl\//i, 'curl', 'tool'],
   [/^Wget/i, 'Wget', 'tool'],
   [/python-requests|python-urllib|aiohttp|httpx|Scrapy/i, 'Python HTTP client', 'tool'],
-  [/Go-http-client/i, 'Go HTTP client', 'tool'],
+  [/Go-http-client|^Go \d|fasthttp/i, 'Go HTTP client', 'tool'],
+  [/reqwest|^Ruby|Faraday|^PHP|GuzzleHttp|^Dart\/|^Deno\/|^Bun\/|^Wget|^HTTPClient|^lwp-/i, 'HTTP client', 'tool'],
   [/axios|node-fetch|undici|got \(|^node$/i, 'Node HTTP client', 'tool'],
   [/okhttp|Apache-HttpClient|Java\//i, 'Java HTTP client', 'tool'],
   [/libwww-perl|PostmanRuntime|insomnia|HTTPie/i, 'HTTP tool', 'tool'],
 ];
+
+/** The operator whose published IP list can verify a UA claim (`null` = no list). */
+export function botOperator(botName: string | null): CrawlerOperator | null {
+  if (!botName) return null;
+  for (const [, name, , op] of BOTS) if (name === botName) return op ?? null;
+  return null;
+}
 
 /** Generic markers that betray an unknown bot. */
 const GENERIC_BOT = /bot\b|crawler|spider|crawling|scraper|fetcher|preview|archiver|validator|checker|monitor|feed|httpclient/i;

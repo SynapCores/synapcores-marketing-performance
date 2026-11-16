@@ -106,7 +106,7 @@ export default async function VisitorsPage({ searchParams }: { searchParams: Pro
                   <tr key={v.anonymous_id} className="border-t border-border align-top">
                     <td className="py-2 pr-3">
                       <Link href={`/visitors/${encodeURIComponent(v.anonymous_id)}`} className="font-mono text-xs underline">{v.anonymous_id.slice(0, 8)}…</Link>
-                      <div className="mt-1"><BotBadge isBot={v.is_bot} name={v.bot_name} category={v.bot_category} /></div>
+                      <div className="mt-1"><BotBadge isBot={v.is_bot} name={v.bot_name} category={v.bot_category} verified={v.bot_verified} /></div>
                     </td>
                     <td className="pr-3">
                       <div>{flag(v.country)} {place(v)}</div>

@@ -16,6 +16,7 @@ import type { BeaconBatch } from '../collector';
 import type { GeoInfo } from './geo';
 import { truncateIp } from './ip';
 import type { ParsedUA } from './ua';
+import { CLASSIFIER_VERSION, type BotVerification } from './classify';
 
 export const PM_EVENTS_TABLE = 'pm_events';
 
@@ -27,7 +28,7 @@ export const PM_EVENT_COLUMNS = [
   'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
   'gclid', 'fbclid', 'ttclid', 'msclkid',
   'user_agent', 'browser', 'browser_version', 'os', 'os_version', 'device_type',
-  'is_bot', 'bot_name', 'bot_category',
+  'is_bot', 'bot_name', 'bot_category', 'bot_verified', 'bot_rules_version',
   'ip', 'ip_prefix', 'ip_truncated',
   'country', 'country_name', 'region', 'city', 'latitude', 'longitude', 'timezone',
   'language', 'screen_w', 'screen_h', 'viewport_w', 'viewport_h', 'properties',
@@ -43,12 +44,18 @@ export const PM_EVENTS_DDL = [
     utm_source TEXT, utm_medium TEXT, utm_campaign TEXT, utm_term TEXT, utm_content TEXT,
     gclid TEXT, fbclid TEXT, ttclid TEXT, msclkid TEXT,
     user_agent TEXT, browser TEXT, browser_version TEXT, os TEXT, os_version TEXT, device_type TEXT,
-    is_bot BOOLEAN, bot_name TEXT, bot_category TEXT,
+    is_bot BOOLEAN, bot_name TEXT, bot_category TEXT, bot_verified TEXT, bot_rules_version INTEGER,
     ip TEXT, ip_prefix TEXT, ip_truncated BOOLEAN,
     country TEXT, country_name TEXT, region TEXT, city TEXT, latitude DOUBLE, longitude DOUBLE, timezone TEXT,
     language TEXT, screen_w INTEGER, screen_h INTEGER, viewport_w INTEGER, viewport_h INTEGER, properties TEXT)`,
   `CREATE INDEX IF NOT EXISTS idx_pm_events_tenant ON pm_events(tenant_id)`,
   `CREATE INDEX IF NOT EXISTS idx_pm_events_anon ON pm_events(anonymous_id)`,
+];
+
+/** Columns added after the first release: ALTERed onto existing tables by ensureEventsTable. */
+export const PM_EVENTS_ADDED_COLUMNS: Array<[string, string]> = [
+  ['bot_verified', 'TEXT'],
+  ['bot_rules_version', 'INTEGER'],
 ];
 
 export interface EnrichContext {
@@ -57,7 +64,7 @@ export interface EnrichContext {
   sourceKind: 'pixel' | 'key' | 'dev';
   ip: string | null;
   geo: GeoInfo;
-  ua: ParsedUA;
+  ua: ParsedUA & { botVerified?: BotVerification | null };
   userAgent: string | null;
   /** Accept-Language header, used when the beacon did not send navigator.language. */
   acceptLanguage?: string | null;
@@ -179,6 +186,8 @@ export function buildEventRows(batch: BeaconBatch, ctx: EnrichContext): PmEventR
       is_bot: ctx.ua.isBot,
       bot_name: ctx.ua.botName,
       bot_category: ctx.ua.botCategory,
+      bot_verified: ctx.ua.isBot ? ctx.ua.botVerified ?? null : null,
+      bot_rules_version: CLASSIFIER_VERSION,
       ip: ctx.ip,
       ip_prefix: ipPrefix,
       ip_truncated: false,

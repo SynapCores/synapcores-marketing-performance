@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@synapcores/app-framework';
 import { visitorBreakdown } from '@/lib/event-store';
 import { flag } from '../visitors/format';
+import { botLabel } from '@/lib/visitor/classify';
 
 /** Dashboard: humans vs bots (incl. AI crawlers) and top countries, last 30 days. */
 export default async function VisitorCard({ tenantId }: { tenantId: string | null | undefined }) {
@@ -57,8 +58,8 @@ export default async function VisitorCard({ tenantId }: { tenantId: string | nul
               {b.bots_by_name.length === 0 ? <p className="text-sm text-muted-foreground">No bots seen.</p> : (
                 <ul className="space-y-1.5 text-sm">
                   {b.bots_by_name.map((x) => (
-                    <li key={x.bot_name} className="flex items-center justify-between gap-2">
-                      <span className="truncate">{x.bot_name} <span className={'text-[11px] ' + (x.bot_category === 'ai' ? 'text-violet-400' : 'text-muted-foreground')}>{x.bot_category}</span></span>
+                    <li key={`${x.bot_name}|${x.bot_verified ?? ''}`} className="flex items-center justify-between gap-2">
+                      <span className="truncate">{botLabel(x.bot_name, x.bot_verified)} <span className={'text-[11px] ' + (x.bot_category === 'ai' ? 'text-violet-400' : 'text-muted-foreground')}>{x.bot_category}</span></span>
                       <span className="tabular-nums text-muted-foreground">{x.events}</span>
                     </li>
                   ))}
