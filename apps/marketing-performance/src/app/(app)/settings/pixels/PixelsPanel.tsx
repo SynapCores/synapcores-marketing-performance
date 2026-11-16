@@ -13,6 +13,7 @@ import {
   disablePixelAction,
   deletePixelAction,
 } from '@/lib/pixel-actions';
+import { LocalTime } from '@/components/LocalTime';
 
 interface Pixel {
   id: string;
@@ -148,7 +149,7 @@ export function PixelsPanel({ pixels, origin }: { pixels: Pixel[]; origin: strin
                     {p.allowed_origins
                       ? `restricted to: ${p.allowed_origins}`
                       : 'accepts events from any origin'}
-                    {p.last_used_at ? ` · last event ${new Date(p.last_used_at).toLocaleString()}` : ' · no events yet'}
+                    {p.last_used_at ? <> · last event <LocalTime value={p.last_used_at} /></> : ' · no events yet'}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">

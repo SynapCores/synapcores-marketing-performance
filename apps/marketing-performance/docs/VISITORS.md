@@ -13,7 +13,7 @@ still fed exactly as before, so attribution is unchanged.
 | Page | `page_url`, `page_path`, `page_title`, `site` (host) |
 | Acquisition | `referrer`, `referrer_domain`, `utm_source/medium/campaign/term/content`, `gclid`, `fbclid`, `ttclid`, `msclkid` |
 | Client | `user_agent`, `browser`, `browser_version`, `os`, `os_version`, `device_type`, `language`, `timezone`, `screen_w/h`, `viewport_w/h` |
-| Bot | `is_bot`, `bot_name`, `bot_category` (`ai`, `search`, `social`, `seo`, `monitor`, `headless`, `tool`, `other`) |
+| Bot | `is_bot`, `bot_name`, `bot_category` (`ai`, `search`, `social`, `seo`, `monitor`, `headless`, `tool`, `other`), `bot_verified` (`verified` / `unverified` / `unverifiable`), `bot_rules_version` |
 | Network | `ip`, `ip_prefix` (/24 or /48), `ip_truncated` |
 | Geo | `country` (ISO-2), `country_name`, `region`, `city`, `latitude`/`longitude` (rounded to 0.1°) |
 
@@ -34,8 +34,27 @@ still fed exactly as before, so attribution is unchanged.
   CCBot, Bytespider, Google-Extended, Meta-ExternalAgent, Amazonbot, Applebot-Extended,
   …), search engines, social link unfurlers, SEO tools, monitors, headless
   browsers and scripted HTTP clients. Most training crawlers don't run
-  JavaScript, so a pixel mainly sees AI *agents/browsers* and headless fetchers.
-  Catching every crawler would need server access logs.
+  JavaScript, so a pixel mainly sees AI *agents/browsers*, headless fetchers and
+  Google's renderer.
+- **Crawler IP verification**: `src/lib/visitor/classify.ts` combines the UA
+  verdict with the client IP and the operators' published crawler ranges
+  (`crawler-sources.json`: Google googlebot / special-crawlers / user-triggered
+  fetchers, Bing, OpenAI GPTBot / OAI-SearchBot / ChatGPT-User, Anthropic,
+  Perplexity, Apple, DuckDuckGo, Common Crawl).
+  - UA claims a crawler and the IP is in that operator's ranges: `verified`.
+  - UA claims it but the IP isn't: `unverified` ("claims Googlebot,
+    unverified"; spoofed or a new range). Still a bot.
+  - Bots with no published list (Yandex, Ahrefs, curl, ...): `unverifiable`.
+  - A normal browser UA from a crawler range (Google renders pages with a
+    plain Chrome UA from 66.249.x): bot, `verified`, named after the range.
+  The lists come from a bundled snapshot (`crawler-ranges.bundled.json`,
+  regenerate with `node bin/update-crawler-ranges.mjs`), are cached in
+  `CRAWLER_RANGES_CACHE` (default `/var/lib/mktperf-app/crawler-ranges.json`)
+  and refreshed every `CRAWLER_RANGES_REFRESH_HOURS` (24). A failed fetch keeps
+  the previous list. When the rules change, bump `CLASSIFIER_VERSION`: stored
+  events with an older `bot_rules_version` are reclassified at boot.
+- A visitor with **any** bot event counts as a bot (Visitors filter and the
+  dashboard split).
 - **Timezone / language / screen**: sent by `track.js`. The `Accept-Language`
   header is the fallback for language.
 

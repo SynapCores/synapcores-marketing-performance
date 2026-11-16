@@ -12,7 +12,14 @@
     "declaration": false,
     "sourceMap": false,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["tests/**/*.ts", "src/lib/visitor/**/*.ts", "src/lib/collector.ts"]
+  "include": [
+    "tests/**/*.ts",
+    "src/lib/visitor/**/*.ts",
+    "src/lib/collector.ts",
+    "src/app/hydration-gate.ts"
+  ]
 }
