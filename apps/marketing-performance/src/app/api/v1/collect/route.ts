@@ -59,7 +59,7 @@ function scheduleRebuild() {
   if (rebuildTimer) return;
   rebuildTimer = setTimeout(() => {
     rebuildTimer = null;
-    rebuildDerived().catch(() => undefined);
+    rebuildDerived().catch((e) => console.error('[collect] attribution rebuild failed:', (e as Error).message));
   }, REBUILD_EVERY_MS);
   rebuildTimer.unref?.();
 }

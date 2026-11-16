@@ -8,6 +8,7 @@ import FlipConnect, { type FlipRow } from './FlipConnect';
 import AngleScatter, { type AngleRow } from './AngleScatter';
 import AskCard from './AskCard';
 import VisitorCard from './VisitorCard';
+import FunnelCard from './FunnelCard';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +32,7 @@ export default async function DashboardPage() {
           <CardContent><Link href="/ingest"><Button>Go to Ingest Data →</Button></Link></CardContent>
         </Card>
         <VisitorCard tenantId={session.tenant?.id} />
+        <FunnelCard tenantId={session.tenant?.id} />
       </div>
     );
   }
@@ -78,6 +80,7 @@ export default async function DashboardPage() {
       </div>
 
       <VisitorCard tenantId={session.tenant?.id} />
+      <FunnelCard tenantId={session.tenant?.id} />
 
       <Card className="tile-gradient">
         <CardHeader><CardTitle>The ROAS Flip</CardTitle>

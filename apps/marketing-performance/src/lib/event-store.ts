@@ -5,6 +5,7 @@ import { CLASSIFIER_VERSION, classifyVisitor, type Classification } from './visi
 import type { CrawlerMatcher } from './visitor/crawler-ranges';
 import { retentionCutoff, retentionDays, truncationSql } from './visitor/retention';
 import { visitorSource } from './visitor/source';
+import { buildFunnel, FUNNEL_EVENT_TYPES, type FunnelReport } from './visitor/funnel';
 
 /**
  * Raw visitor events (`pm_events`) — writes from the collector, retention
@@ -267,6 +268,34 @@ export async function visitorBreakdown(tenantId: string, days = 30): Promise<Vis
     countries: countries.rows.map((r) => ({ country: String(r.country), country_name: String(r.country_name ?? r.country), visitors: Number(r.visitors ?? 0) })),
     bots_by_name: bots.rows.map((r) => ({ bot_name: String(r.bot_name ?? 'Unknown'), bot_category: String(r.bot_category ?? 'other'), bot_verified: asStr(r.bot_verified), events: Number(r.events ?? 0) })),
   };
+}
+
+/**
+ * Conversion funnel (visit → pricing → lead → sign-up → checkout → purchase)
+ * for human visitors in the last `days` days. Reads distinct (site, event,
+ * visitor) triples — bounded by the LIMIT — and counts per step in JS so a
+ * visitor is counted once per step even when a step has several event names.
+ */
+export async function conversionFunnel(tenantId: string, days = 30): Promise<FunnelReport & { since: string; truncated: boolean }> {
+  await ensureEventsTable();
+  const since = sqlTs(new Date(Date.now() - days * 86400_000));
+  const cap = 50_000;
+  const r = await db().sql<Row>(
+    `SELECT site, event_type, anonymous_id, COUNT(*) AS events
+       FROM pm_events
+      WHERE tenant_id = $1 AND occurred_at >= $2 AND is_bot = FALSE
+        AND event_type IN (${FUNNEL_EVENT_TYPES.map(lit).join(',')})
+      GROUP BY site, event_type, anonymous_id
+      LIMIT ${cap}`,
+    [tenantId, since],
+  );
+  const report = buildFunnel(r.rows.map((x) => ({
+    site: asStr(x.site),
+    event_type: asStr(x.event_type),
+    anonymous_id: asStr(x.anonymous_id),
+    events: Number(x.events ?? 1),
+  })));
+  return { ...report, since, truncated: r.rows.length >= cap };
 }
 
 // ── reclassification (backfill) ──────────────────────────────────────────────

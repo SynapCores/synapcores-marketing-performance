@@ -157,22 +157,34 @@ export const SEED = [
 // NOTE: written with inline derived tables, not CTEs — on SynapCores 2.x,
 // joins between CTEs drop the ON predicate (cross product). Derived-table
 // joins behave correctly.
+//
+// Only purchase conversions make a "new customer": lead / signup rows (written
+// by the pixel collector, see NON_PURCHASE_CONVERSIONS in collector.ts) are
+// conversions for reporting but must not inflate new_customers / CAC / ROAS.
+//
+// SynapCores CE applies a window subquery's WHERE after projection, so the
+// join + lookback filter runs in its own (window-free) derived table `touches`
+// and the window ranks that; filtering e.occurred_at in the same SELECT as the
+// ROW_NUMBER fails with "Column 'e.occurred_at' not found".
 export const ATTRIBUTION = `
   INSERT INTO recipe_pm_attribution (conversion_id, anonymous_id, customer_id, campaign_id, platform, first_order_revenue, converted_at)
   SELECT w.conversion_id, w.anonymous_id, i.customer_id, w.campaign_id, w.source, w.revenue, w.convert_at
   FROM (
     SELECT conversion_id, anonymous_id, revenue, campaign_id, source, convert_at
     FROM (
-      SELECT v.conversion_id AS conversion_id, v.anonymous_id AS anonymous_id, v.revenue AS revenue,
-             e.utm_campaign AS campaign_id, e.utm_source AS source,
-             v.occurred_at AS convert_at,
-             ROW_NUMBER() OVER (PARTITION BY v.conversion_id ORDER BY e.occurred_at DESC) AS rn
-      FROM recipe_pm_conversions v
-      JOIN recipe_pm_click_events e ON e.anonymous_id = v.anonymous_id
-      WHERE e.occurred_at <= v.occurred_at
-        AND (julianday(v.occurred_at) - julianday(e.occurred_at)) <= 30
+      SELECT conversion_id, anonymous_id, revenue, campaign_id, source, convert_at, event_name,
+             ROW_NUMBER() OVER (PARTITION BY conversion_id ORDER BY click_at DESC) AS rn
+      FROM (
+        SELECT v.conversion_id AS conversion_id, v.anonymous_id AS anonymous_id, v.revenue AS revenue,
+               e.utm_campaign AS campaign_id, e.utm_source AS source,
+               e.occurred_at AS click_at, v.occurred_at AS convert_at, v.event_name AS event_name
+        FROM recipe_pm_conversions v
+        JOIN recipe_pm_click_events e ON e.anonymous_id = v.anonymous_id
+        WHERE e.occurred_at <= v.occurred_at
+          AND (julianday(v.occurred_at) - julianday(e.occurred_at)) <= 30
+      ) touches
     ) ranked
-    WHERE rn = 1
+    WHERE rn = 1 AND COALESCE(event_name, 'first_purchase') NOT IN ('lead', 'signup')
   ) w
   JOIN recipe_pm_identity i ON i.anonymous_id = w.anonymous_id`;
 

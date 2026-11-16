@@ -19,7 +19,7 @@ export const TABLE_META: Record<string, { label: string; group: string; desc: st
   recipe_pm_creative:          { label: 'Creative',        group: 'Platform',    desc: 'Ad headline + body copy, embedded as a 384-dim angle vector', source: 'Ad accounts' },
   recipe_pm_click_events:      { label: 'Click Events',    group: 'First-party', desc: 'Your own landing hits with UTMs + click IDs (fbclid/ttclid/gclid)', source: 'Web analytics' },
   recipe_pm_identity:          { label: 'Identity',        group: 'First-party', desc: 'Anonymous browser → known customer resolution', source: 'CDP / identity graph' },
-  recipe_pm_conversions:       { label: 'Conversions',     group: 'First-party', desc: 'First-purchase events with revenue', source: 'Checkout' },
+  recipe_pm_conversions:       { label: 'Conversions',     group: 'First-party', desc: 'Purchases (with revenue), leads and sign-ups — event_name first_purchase | lead | signup', source: 'Checkout' },
   recipe_pm_orders:            { label: 'Orders',          group: 'First-party', desc: 'Full order history incl. the repeats ad platforms never see', source: 'Orders DB' },
   recipe_pm_attribution:       { label: 'Attribution',     group: 'Derived',     desc: 'Last-touch attribution ledger (computed)', source: 'Derived · Step 7' },
   recipe_pm_campaign_scorecard:{ label: 'Campaign Scorecard', group: 'Derived',  desc: 'Day-0 + 90-day LTV scorecard (computed)', source: 'Derived · Step 10' },
