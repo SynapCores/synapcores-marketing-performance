@@ -5,6 +5,7 @@ import { requireSession } from '@/lib/session';
 import { filterOptions, listVisitors, type VisitorFilters } from '@/lib/event-store';
 import { KIND_OPTIONS, parseKind } from '@/lib/visitor/kinds';
 import FilterBar, { type FilterField } from '@/components/FilterBar';
+import { SortHeader, cmp, parseSort } from '@/components/SortHeader';
 import { GEO_ATTRIBUTION, KindBadge, flag, place, when } from './format';
 
 export const dynamic = 'force-dynamic';
@@ -35,6 +36,11 @@ export default async function VisitorsPage({ searchParams }: { searchParams: Pro
     tz: one(sp.tz) || null,
   };
   const [visitors, opts] = await Promise.all([listVisitors(tenantId, filters, 200), filterOptions(tenantId)]);
+  // Default: most recently seen first. Column headers re-sort (filters kept).
+  const { sort, dir } = parseSort(one(sp.sort), one(sp.dir), ['last_seen', 'first_seen', 'pages', 'events'] as const, 'last_seen');
+  visitors.sort((a, b) => cmp(a[sort], b[sort], dir) || cmp(a.last_seen, b.last_seen, 'desc'));
+  const filterQs = (() => { const q = new URLSearchParams(); for (const [k, v] of Object.entries(sp)) { const x = one(v); if (x && k !== 'sort' && k !== 'dir') q.set(k, x); } return q.toString(); })();
+  const sh = { query: filterQs, sort, dir };
   const counts = { human: 0, internal: 0, suspected: 0, bot: 0 };
   for (const v of visitors) counts[v.kind]++;
   const any = (label: string) => ({ value: '', label });
@@ -86,10 +92,10 @@ export default async function VisitorsPage({ searchParams }: { searchParams: Pro
                   <th className="pr-3">Device / browser / OS</th>
                   <th className="pr-3">Source · campaign</th>
                   <th className="pr-3">Site · landing</th>
-                  <th className="pr-3 text-right">Pages</th>
-                  <th className="pr-3 text-right">Events</th>
-                  <th className="pr-3">First seen</th>
-                  <th>Last seen</th>
+                  <SortHeader label="Pages" col="pages" align="right" className="pr-3" {...sh} />
+                  <SortHeader label="Events" col="events" align="right" className="pr-3" {...sh} />
+                  <SortHeader label="First seen" col="first_seen" className="pr-3" {...sh} />
+                  <SortHeader label="Last seen" col="last_seen" {...sh} />
                 </tr>
               </thead>
               <tbody>

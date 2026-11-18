@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { SortHeader, cmp, parseSort } from '@/components/SortHeader';
 import { Suspense } from 'react';
 import { AppPageHeader, Card, CardContent } from '@synapcores/app-framework';
 import { requireSession } from '@/lib/session';
@@ -29,6 +30,12 @@ export default async function UtmCampaignsPage({ searchParams }: { searchParams:
   const kind = parseKind(one(sp.kind));
   const f = { kind, site: one(sp.site) || null, from: one(sp.from) || null, to: one(sp.to) || null, tz: one(sp.tz) || null };
   const [rows, opts] = await Promise.all([campaignReport(tenantId, f), filterOptions(tenantId)]);
+  // Default: most recent visit first (never-visited saved links last). Headers re-sort.
+  const SORTS = ['last_seen', 'visitors', 'sessions', 'pageviews', 'leads', 'signups', 'purchases', 'excluded'] as const;
+  const { sort, dir } = parseSort(one(sp.sort), one(sp.dir), SORTS, 'last_seen');
+  rows.sort((a, b) => cmp(a[sort], b[sort], dir) || cmp(a.last_seen ?? a.saved?.created_at ?? null, b.last_seen ?? b.saved?.created_at ?? null, 'desc'));
+  const filterQs = (() => { const q = new URLSearchParams(); for (const [k, v] of Object.entries(sp)) { const x = one(v); if (x && k !== 'sort' && k !== 'dir') q.set(k, x); } return q.toString(); })();
+  const sh = { query: filterQs, sort, dir };
   const fields: FilterField[] = [
     { name: 'kind', label: 'Type', type: 'select', defaultValue: 'human', options: KIND_OPTIONS },
     { name: 'site', label: 'Site', type: 'select', options: [{ value: '', label: 'All sites' }, ...opts.sites.map((s) => ({ value: s, label: s }))] },
@@ -73,14 +80,14 @@ export default async function UtmCampaignsPage({ searchParams }: { searchParams:
                   <th className="py-2 pr-3">Campaign</th>
                   <th className="pr-3">Site</th>
                   <th className="pr-3">Source / medium</th>
-                  <th className="pr-3 text-right">Visitors</th>
-                  <th className="pr-3 text-right">Sessions</th>
-                  <th className="pr-3 text-right">Pageviews</th>
-                  <th className="pr-3 text-right">Leads</th>
-                  <th className="pr-3 text-right">Sign-ups</th>
-                  <th className="pr-3 text-right">Purchases</th>
-                  <th className="pr-3 text-right" title="Visitors of this campaign left out by the Type filter (internal, suspected bots, bots)">Filtered out</th>
-                  <th>Last visit</th>
+                  <SortHeader label="Visitors" col="visitors" align="right" className="pr-3" {...sh} />
+                  <SortHeader label="Sessions" col="sessions" align="right" className="pr-3" {...sh} />
+                  <SortHeader label="Pageviews" col="pageviews" align="right" className="pr-3" {...sh} />
+                  <SortHeader label="Leads" col="leads" align="right" className="pr-3" {...sh} />
+                  <SortHeader label="Sign-ups" col="signups" align="right" className="pr-3" {...sh} />
+                  <SortHeader label="Purchases" col="purchases" align="right" className="pr-3" {...sh} />
+                  <SortHeader label="Filtered out" col="excluded" align="right" className="pr-3" title="Visitors of this campaign left out by the Type filter (internal, suspected bots, bots)" {...sh} />
+                  <SortHeader label="Last visit" col="last_seen" {...sh} />
                 </tr>
               </thead>
               <tbody>
