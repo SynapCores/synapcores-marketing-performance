@@ -1,8 +1,11 @@
 import Link from 'next/link';
-import { AppPageHeader, Button, Card, CardContent } from '@synapcores/app-framework';
+import { Suspense } from 'react';
+import { AppPageHeader, Card, CardContent } from '@synapcores/app-framework';
 import { requireSession } from '@/lib/session';
 import { filterOptions, listVisitors, type VisitorFilters } from '@/lib/event-store';
-import { BotBadge, GEO_ATTRIBUTION, flag, place, when } from './format';
+import { KIND_OPTIONS, parseKind } from '@/lib/visitor/kinds';
+import FilterBar, { type FilterField } from '@/components/FilterBar';
+import { GEO_ATTRIBUTION, KindBadge, flag, place, when } from './format';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,16 +23,30 @@ export default async function VisitorsPage({ searchParams }: { searchParams: Pro
     );
   }
   const sp = await searchParams;
-  const kindRaw = one(sp.kind);
   const filters: VisitorFilters = {
-    kind: kindRaw === 'bot' || kindRaw === 'human' ? kindRaw : 'all',
+    kind: parseKind(one(sp.kind)),
     site: one(sp.site) || null,
     country: one(sp.country) || null,
     from: one(sp.from) || null,
     to: one(sp.to) || null,
+    utm_source: one(sp.utm_source) || null,
+    utm_medium: one(sp.utm_medium) || null,
+    utm_campaign: one(sp.utm_campaign) || null,
   };
   const [visitors, opts] = await Promise.all([listVisitors(tenantId, filters, 200), filterOptions(tenantId)]);
-  const bots = visitors.filter((v) => v.is_bot).length;
+  const counts = { human: 0, internal: 0, suspected: 0, bot: 0 };
+  for (const v of visitors) counts[v.kind]++;
+  const any = (label: string) => ({ value: '', label });
+  const fields: FilterField[] = [
+    { name: 'kind', label: 'Type', type: 'select', defaultValue: 'human', options: KIND_OPTIONS },
+    { name: 'site', label: 'Site', type: 'select', options: [any('All sites'), ...opts.sites.map((s) => ({ value: s, label: s }))] },
+    { name: 'country', label: 'Country', type: 'select', options: [any('All countries'), ...opts.countries.map((c) => ({ value: c.code, label: `${flag(c.code)} ${c.name}` }))] },
+    { name: 'utm_source', label: 'UTM source', type: 'select', options: [any('Any source'), ...opts.utm_sources.map((x) => ({ value: x, label: x }))] },
+    { name: 'utm_medium', label: 'UTM medium', type: 'select', options: [any('Any medium'), ...opts.utm_mediums.map((x) => ({ value: x, label: x }))] },
+    { name: 'utm_campaign', label: 'Campaign', type: 'select', options: [any('Any campaign'), ...opts.utm_campaigns.map((x) => ({ value: x, label: x }))] },
+    { name: 'from', label: 'From', type: 'date' },
+    { name: 'to', label: 'To', type: 'date' },
+  ];
 
   return (
     <div className="space-y-6">
@@ -40,43 +57,16 @@ export default async function VisitorsPage({ searchParams }: { searchParams: Pro
 
       <Card>
         <CardContent className="pt-6">
-          <form method="get" className="flex flex-wrap items-end gap-3 text-sm">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">Type</span>
-              <select name="kind" defaultValue={filters.kind} className="rounded-md border border-border bg-background px-2 py-1.5">
-                <option value="all">Humans + bots</option>
-                <option value="human">Humans only</option>
-                <option value="bot">Bots only</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">Site</span>
-              <select name="site" defaultValue={filters.site ?? ''} className="rounded-md border border-border bg-background px-2 py-1.5">
-                <option value="">All sites</option>
-                {opts.sites.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">Country</span>
-              <select name="country" defaultValue={filters.country ?? ''} className="rounded-md border border-border bg-background px-2 py-1.5">
-                <option value="">All countries</option>
-                {opts.countries.map((c) => <option key={c.code} value={c.code}>{flag(c.code)} {c.name}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">From</span>
-              <input type="date" name="from" defaultValue={filters.from ?? ''} className="rounded-md border border-border bg-background px-2 py-1" />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">To</span>
-              <input type="date" name="to" defaultValue={filters.to ?? ''} className="rounded-md border border-border bg-background px-2 py-1" />
-            </label>
-            <Button type="submit" size="sm">Apply</Button>
-            <Link href="/visitors" className="pb-1.5 text-xs text-muted-foreground underline">reset</Link>
-            <span className="ml-auto pb-1.5 text-xs text-muted-foreground">
-              {visitors.length} visitor{visitors.length === 1 ? '' : 's'} shown · {visitors.length - bots} human · {bots} bot
-            </span>
-          </form>
+          <Suspense>
+            <FilterBar
+              report="visitors"
+              fields={fields}
+              summary={<>{visitors.length} visitor{visitors.length === 1 ? '' : 's'} shown · {counts.human} human · {counts.internal} internal · {counts.suspected} suspected · {counts.bot} bot</>}
+            />
+          </Suspense>
+          <p className="mt-3 text-xs text-muted-foreground">
+            <b>Humans</b> leaves out our own IPs (internal), declared/verified crawlers (bots) and traffic that looks automated without saying so — bursts of identical single-page visits and data-centre networks (suspected). Pick those types above to review them; nothing is deleted.
+          </p>
         </CardContent>
       </Card>
 
@@ -93,7 +83,7 @@ export default async function VisitorsPage({ searchParams }: { searchParams: Pro
                   <th className="py-2 pr-3">Visitor</th>
                   <th className="pr-3">Location</th>
                   <th className="pr-3">Device / browser / OS</th>
-                  <th className="pr-3">Source</th>
+                  <th className="pr-3">Source · campaign</th>
                   <th className="pr-3">Site · landing</th>
                   <th className="pr-3 text-right">Pages</th>
                   <th className="pr-3 text-right">Events</th>
@@ -106,7 +96,7 @@ export default async function VisitorsPage({ searchParams }: { searchParams: Pro
                   <tr key={v.anonymous_id} className="border-t border-border align-top">
                     <td className="py-2 pr-3">
                       <Link href={`/visitors/${encodeURIComponent(v.anonymous_id)}`} className="font-mono text-xs underline">{v.anonymous_id.slice(0, 8)}…</Link>
-                      <div className="mt-1"><BotBadge isBot={v.is_bot} name={v.bot_name} category={v.bot_category} verified={v.bot_verified} /></div>
+                      <div className="mt-1"><KindBadge kind={v.kind} reason={v.kind_reason} isBot={v.is_bot} name={v.bot_name} category={v.bot_category} verified={v.bot_verified} /></div>
                     </td>
                     <td className="pr-3">
                       <div>{flag(v.country)} {place(v)}</div>
@@ -116,7 +106,10 @@ export default async function VisitorsPage({ searchParams }: { searchParams: Pro
                       <div className="capitalize">{v.device_type ?? '—'}</div>
                       <div className="text-xs text-muted-foreground">{[v.browser && `${v.browser}${v.browser_version ? ' ' + v.browser_version : ''}`, v.os].filter(Boolean).join(' · ') || '—'}</div>
                     </td>
-                    <td className="pr-3">{v.source}</td>
+                    <td className="pr-3">
+                      <div>{v.source}</div>
+                      {v.utm_campaign && <div className="max-w-[200px] truncate text-xs text-muted-foreground" title={[v.utm_campaign, v.utm_content].filter(Boolean).join(' · ')}>{v.utm_campaign}{v.utm_content ? ` · ${v.utm_content}` : ''}</div>}
+                    </td>
                     <td className="pr-3">
                       <div>{v.site ?? '—'}</div>
                       <div className="max-w-[220px] truncate text-xs text-muted-foreground" title={v.landing_path ?? ''}>{v.landing_path ?? ''}</div>

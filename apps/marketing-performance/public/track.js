@@ -57,7 +57,11 @@
   };
   
   // State management
+  const ATTRIBUTION_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'gclid', 'fbclid', 'ttclid', 'msclkid'];
+  const ATTRIBUTION_STORE = 'ecomm_tracker_attribution';
+
   let state = {
+    attribution: null, // session campaign params (see utils.attribution)
     userId: null,
     sessionId: null,
     eventQueue: [],
@@ -129,15 +133,57 @@
       return null;
     },
     
-    getQueryParams: function() {
-      const queryParams = {};
-      const search = window.location.search.substring(1);
-      if (search) {
-        const pairs = search.split('&');
-        for (let i = 0; i < pairs.length; i++) {
-          const pair = pairs[i].split('=');
-          queryParams[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1] || '');
+    parseSearch: function(search) {
+      const out = {};
+      const s = String(search || '').replace(/^\?/, '');
+      if (!s) return out;
+      const pairs = s.split('&');
+      for (let i = 0; i < pairs.length; i++) {
+        const pair = pairs[i].split('=');
+        try {
+          out[decodeURIComponent(pair[0].replace(/\+/g, ' '))] = decodeURIComponent((pair[1] || '').replace(/\+/g, ' '));
+        } catch (e) { /* malformed escape: skip */ }
+      }
+      return out;
+    },
+
+    // Campaign attribution for this browser session (tab). The landing URL's
+    // utm_* / click ids are kept in sessionStorage and sent with every later
+    // event of the session, so a sign-up three pages later still carries the
+    // campaign. A new campaign link in the same tab replaces them.
+    // A host page that rewrites its address before this script loads (an
+    // SPA) can hand over the original landing URL in window.EcommTrackerLanding.
+    attribution: function() {
+      if (state.attribution) return state.attribution;
+      const pick = (params) => {
+        const a = {};
+        let any = false;
+        for (let i = 0; i < ATTRIBUTION_KEYS.length; i++) {
+          const k = ATTRIBUTION_KEYS[i];
+          if (params[k]) { a[k] = String(params[k]).slice(0, 512); any = true; }
         }
+        return any ? a : null;
+      };
+      let found = pick(this.parseSearch(window.location.search));
+      if (!found) {
+        try {
+          const l = window.EcommTrackerLanding;
+          if (l && l.url) found = pick(this.parseSearch(new URL(l.url, window.location.href).search));
+        } catch (e) { /* bad landing url */ }
+      }
+      try {
+        if (found) window.sessionStorage.setItem(ATTRIBUTION_STORE, JSON.stringify(found));
+        else found = JSON.parse(window.sessionStorage.getItem(ATTRIBUTION_STORE) || 'null');
+      } catch (e) { /* storage blocked: landing-page attribution only */ }
+      state.attribution = found || {};
+      return state.attribution;
+    },
+
+    getQueryParams: function() {
+      const queryParams = this.parseSearch(window.location.search);
+      const a = this.attribution();
+      for (const k in a) {
+        if (!queryParams[k]) queryParams[k] = a[k];
       }
       return queryParams;
     },
@@ -345,11 +391,20 @@
         // Set initialized state
         state.initialized = true;
         
-        // Track initial pageview
+        // Track initial pageview (an SPA may hand over its original landing URL).
+        let landing = null;
+        try {
+          const l = window.EcommTrackerLanding;
+          if (l && l.url) {
+            const u = new URL(l.url, window.location.href);
+            if (u.origin === window.location.origin) landing = { url: u.href, path: l.path || u.pathname };
+          }
+        } catch (e) { /* ignore */ }
+        utils.attribution();
         EcommTracker.track('pageview', {
           title: document.title,
-          url: window.location.href,
-          path: window.location.pathname,
+          url: landing ? landing.url : window.location.href,
+          path: landing ? landing.path : window.location.pathname,
           referrer: document.referrer
         });
         

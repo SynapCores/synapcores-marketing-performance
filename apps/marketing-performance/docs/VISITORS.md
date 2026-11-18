@@ -78,3 +78,45 @@ still fed exactly as before, so attribution is unchanged.
   top countries and bots by name.
 
 All reads are scoped to the signed-in workspace (`tenant_id`).
+
+## Visitor types: human, internal, suspected bot, bot
+
+Every report that says "humans" (Visitors, dashboard card, funnel, UTM Campaigns)
+uses one classification, `src/lib/visitor/kinds.ts`, computed at read time over
+all of the workspace's visitors (cached 30 s). Precedence: internal > bot > suspected > human.
+
+| Type | Rule |
+|---|---|
+| internal | any event from an IP in `VISITOR_INTERNAL_IPS` |
+| bot | declared / verified crawler (UA + published ranges, `classify.ts`) |
+| suspected | a **burst**: ≥ `VISITOR_BURST_MIN` (5) single-pageview, no-interaction visitors first seen within `VISITOR_BURST_WINDOW_S` (60) s on the same site, from the same utm_source / referrer, with the same browser, OS, device and screen size; or a **data-centre network**: hosting ASN (DB-IP ASN Lite, `asn.ts`) or `VISITOR_DATACENTER_IPS` |
+| human | everyone else |
+
+Nothing is deleted: the Type filter shows each group. Config (app env):
+
+```
+VISITOR_INTERNAL_IPS="136.57.16.0/24 office, 100.51.180.101 agentNet server, 98.121.244.0/24 Pineville NC"
+VISITOR_DATACENTER_IPS="203.0.113.0/24 some-host"     # optional, on top of the ASN list
+VISITOR_BURST_MIN=5
+VISITOR_BURST_WINDOW_S=60
+GEOIP_ASN_DB_PATH=/opt/mktperf/geoip/dbip-asn-lite.mmdb   # default: next to GEOIP_DB_PATH
+```
+
+Entries are `cidr[ label]`, separated by commas or new lines; the label is shown as the reason.
+`bin/update-geoip.sh` refreshes both DB-IP files monthly.
+
+## UTM campaigns
+
+- The pixel keeps the landing URL's `utm_*` / click ids in `sessionStorage` for the tab's
+  session and sends them with every later event, so a sign-up on a later page still carries
+  the campaign. An SPA that rewrites its address before `track.js` loads can hand over the
+  original landing URL: `window.EcommTrackerLanding = { url, path }` (same origin only).
+- **UTM Campaigns** (`/utm-campaigns`): visitors, sessions, pageviews, leads, sign-ups and
+  purchases per (site, utm_source, utm_medium, utm_campaign). Saved campaigns with no traffic
+  show as "no traffic yet"; campaigns in the data that were never saved show as "untracked".
+- **Campaign Links** (`/utm-campaigns/builder`): builds the tagged URL and saves the campaign
+  (`pm_campaigns`: name, channel, notes, created date, tagged URL).
+
+Filters on these reports live in the URL (Back/Forward restore them) and the last-used
+filters per report are kept in `localStorage` (`mp:filters:<report>`) and restored when the
+report is opened without parameters.

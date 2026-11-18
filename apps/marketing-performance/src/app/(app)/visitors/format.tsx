@@ -33,3 +33,23 @@ export function BotBadge({ isBot, name, category, verified }: { isBot: boolean; 
 export const GEO_ATTRIBUTION = (
   <>IP geolocation by <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer" className="underline">DB-IP</a> (IP to City Lite, CC BY 4.0).</>
 );
+
+const KIND_STYLE: Record<string, string> = {
+  internal: 'bg-sky-500/15 text-sky-500',
+  suspected: 'bg-orange-500/15 text-orange-500',
+};
+
+/** Human / internal / suspected / bot badge with the reason on hover. */
+export function KindBadge({ kind, reason, isBot, name, category, verified }: {
+  kind: 'human' | 'internal' | 'suspected' | 'bot'; reason?: string | null;
+  isBot: boolean; name?: string | null; category?: string | null; verified?: string | null;
+}) {
+  if (kind === 'internal' || kind === 'suspected') {
+    return (
+      <span title={reason ?? ''} className={'inline-block max-w-[220px] truncate rounded px-1.5 py-0.5 align-bottom text-[11px] font-medium ' + KIND_STYLE[kind]}>
+        {kind === 'internal' ? 'internal' : 'suspected bot'}{reason ? ` · ${reason.replace(/^internal IP /, '')}` : ''}
+      </span>
+    );
+  }
+  return <BotBadge isBot={kind === 'bot' || isBot} name={name} category={category} verified={verified} />;
+}

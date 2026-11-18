@@ -1,9 +1,9 @@
 import { notFound } from 'next/navigation';
 import { AppPageHeader, Card, CardContent, CardDescription, CardHeader, CardTitle } from '@synapcores/app-framework';
 import { requireSession } from '@/lib/session';
-import { visitorEvents } from '@/lib/event-store';
+import { visitorContext, visitorEvents } from '@/lib/event-store';
 import { visitorSource } from '@/lib/visitor/source';
-import { BotBadge, GEO_ATTRIBUTION, flag, place, when } from '../format';
+import { GEO_ATTRIBUTION, KindBadge, flag, place, when } from '../format';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,13 +31,15 @@ export default async function VisitorDetailPage({ params }: { params: Promise<{ 
   if (!tenantId) notFound();
   const { id } = await params;
   const anonymousId = decodeURIComponent(id);
-  const events = await visitorEvents(tenantId, anonymousId);
+  const [events, ctx] = await Promise.all([visitorEvents(tenantId, anonymousId), visitorContext(tenantId)]);
   if (!events.length) notFound();
 
   const first = events[0]!;
   const last = events[events.length - 1]!;
   const isBot = events.some((e) => isTrue(e.is_bot));
   const botRow = [...events].reverse().find((e) => isTrue(e.is_bot)) ?? last;
+  const verdict = ctx.kinds.get(anonymousId) ?? { kind: isBot ? 'bot' as const : 'human' as const, reason: null };
+  const touches = ctx.touches.get(anonymousId) ?? [];
   const ips = Array.from(new Set(events.map((e) => s(e.ip)).filter(Boolean))) as string[];
 
   // Group the timeline by session, in order of first appearance.
@@ -50,7 +52,7 @@ export default async function VisitorDetailPage({ params }: { params: Promise<{ 
 
   const facts: Array<[string, React.ReactNode]> = [
     ['Visitor id', <span key="id" className="font-mono text-xs">{anonymousId}</span>],
-    ['Type', <BotBadge key="b" isBot={isBot} name={s(botRow.bot_name)} category={s(botRow.bot_category)} verified={s(botRow.bot_verified)} />],
+    ['Type', <span key="b" className="space-x-2"><KindBadge kind={verdict.kind} reason={verdict.reason} isBot={isBot} name={s(botRow.bot_name)} category={s(botRow.bot_category)} verified={s(botRow.bot_verified)} />{verdict.reason && <span className="text-xs text-muted-foreground">{verdict.reason}</span>}</span>],
     ['Location', <span key="l">{flag(s(last.country))} {place({ city: s(last.city), region: s(last.region), country: s(last.country), country_name: s(last.country_name) })}</span>],
     ['IP address', <span key="ip" className="font-mono text-xs">{ips.join(', ') || '—'}{isTrue(last.ip_truncated) ? ' (truncated after retention window)' : ''}</span>],
     ['Time zone · language', `${s(last.timezone) ?? '—'} · ${s(last.language) ?? '—'}`],
@@ -60,6 +62,7 @@ export default async function VisitorDetailPage({ params }: { params: Promise<{ 
     ['First touch', `${visitorSource(first)} → ${s(first.site) ?? ''}${s(first.page_path) ?? ''}`],
     ['Referrer (first)', s(first.referrer) ?? '—'],
     ['Campaign (first)', [s(first.utm_campaign), s(first.utm_term), s(first.utm_content)].filter(Boolean).join(' · ') || '—'],
+    ['UTM touches', touches.length ? touches.map((t) => `${when(t.first_at)}: ${[t.utm_source, t.utm_medium, t.utm_campaign, t.utm_content].map((x) => x ?? '—').join(' / ')}`).join(' · ') : '—'],
     ['Click ids', [['gclid', first.gclid], ['fbclid', first.fbclid], ['ttclid', first.ttclid], ['msclkid', first.msclkid]].filter(([, v]) => s(v)).map(([k]) => k).join(', ') || '—'],
     ['First / last seen', `${when(first.occurred_at)} → ${when(last.occurred_at)}`],
     ['Activity', `${events.length} events · ${sessions.size} session${sessions.size === 1 ? '' : 's'}`],

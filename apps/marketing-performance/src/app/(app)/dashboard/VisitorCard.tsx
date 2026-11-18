@@ -13,8 +13,9 @@ export default async function VisitorCard({ tenantId }: { tenantId: string | nul
   } catch {
     return null; // never take the dashboard down over this card
   }
-  const totalV = b.humans.visitors + b.bots.visitors;
-  const botPct = totalV ? Math.round((b.bots.visitors / totalV) * 100) : 0;
+  const totalV = b.humans.visitors + b.bots.visitors + b.internal.visitors + b.suspected.visitors;
+  const nonHuman = b.bots.visitors + b.suspected.visitors;
+  const botPct = totalV ? Math.round((nonHuman / Math.max(1, totalV - b.internal.visitors)) * 100) : 0;
   const maxC = Math.max(1, ...b.countries.map((c) => c.visitors));
   const aiEvents = b.bots_by_name.filter((x) => x.bot_category === 'ai').reduce((n, x) => n + x.events, 0);
 
@@ -30,12 +31,14 @@ export default async function VisitorCard({ tenantId }: { tenantId: string | nul
         ) : (
           <div className="grid gap-6 md:grid-cols-3">
             <div className="space-y-3">
-              <div className="flex items-baseline justify-between text-sm"><span>Humans</span><span className="text-xl font-bold tabular-nums">{b.humans.visitors}</span></div>
-              <div className="flex items-baseline justify-between text-sm"><span>Bots</span><span className="text-xl font-bold tabular-nums">{b.bots.visitors}</span></div>
+              <Link href="/visitors?kind=human" className="flex items-baseline justify-between text-sm"><span>Humans</span><span className="text-xl font-bold tabular-nums">{b.humans.visitors}</span></Link>
+              <Link href="/visitors?kind=bot" className="flex items-baseline justify-between text-sm"><span>Bots</span><span className="text-xl font-bold tabular-nums">{b.bots.visitors}</span></Link>
+              <Link href="/visitors?kind=suspected" className="flex items-baseline justify-between text-sm"><span>Suspected bots <span className="text-xs text-muted-foreground">(bursts, data centres)</span></span><span className="font-semibold tabular-nums">{b.suspected.visitors}</span></Link>
+              <Link href="/visitors?kind=internal" className="flex items-baseline justify-between text-sm"><span>Internal <span className="text-xs text-muted-foreground">(our IPs)</span></span><span className="font-semibold tabular-nums">{b.internal.visitors}</span></Link>
               <div className="h-2 w-full overflow-hidden rounded bg-emerald-500/30">
                 <div className="h-full bg-amber-500" style={{ width: `${botPct}%` }} />
               </div>
-              <p className="text-xs text-muted-foreground">{botPct}% of visitors are bots · {b.humans.events} human / {b.bots.events} bot events{aiEvents ? ` · ${aiEvents} from AI bots` : ''}</p>
+              <p className="text-xs text-muted-foreground">{botPct}% of outside visitors are bots or suspected bots · {b.humans.events} human / {b.bots.events} bot events{aiEvents ? ` · ${aiEvents} from AI bots` : ''}</p>
             </div>
             <div>
               <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Top countries (humans)</h4>
