@@ -3,6 +3,7 @@ import { AppPageHeader, Card, CardContent, DataTable, type DataTableColumn } fro
 import { requireSession } from '@/lib/session';
 import { tableRows, TABLE_META, type Row } from '@/lib/warehouse';
 import { TABLES } from '@/lib/recipe-sql';
+import { LocalTime, looksLikeTimestamp } from '@/components/LocalTime';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,8 +41,9 @@ export default async function TableBrowsePage({ params }: { params: Promise<{ ta
   );
 }
 
-function formatCell(v: unknown): string {
+function formatCell(v: unknown): React.ReactNode {
   if (v == null) return '—';
+  if (looksLikeTimestamp(v)) return <LocalTime value={v} />;
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2);
   return String(v);
 }

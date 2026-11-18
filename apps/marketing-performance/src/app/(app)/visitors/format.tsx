@@ -1,5 +1,6 @@
 /** Shared display helpers for the Visitors pages and the dashboard card. */
 import { botLabel } from '@/lib/visitor/classify';
+import { LocalTime } from '@/components/LocalTime';
 
 export function flag(cc: string | null | undefined): string {
   if (!cc || !/^[A-Za-z]{2}$/.test(cc)) return '';
@@ -11,10 +12,10 @@ export function place(v: { city?: string | null; region?: string | null; country
   return parts.length ? parts.join(', ') : '—';
 }
 
-export function when(ts: unknown): string {
+/** A stored (UTC) timestamp, shown in the viewer's chosen time zone. */
+export function when(ts: unknown) {
   if (ts == null || ts === '') return '—';
-  const s = String(ts).replace('T', ' ').slice(0, 19);
-  return `${s} UTC`;
+  return <LocalTime value={ts instanceof Date || typeof ts === 'number' ? ts : String(ts)} />;
 }
 
 export function BotBadge({ isBot, name, category, verified }: { isBot: boolean; name?: string | null; category?: string | null; verified?: string | null }) {

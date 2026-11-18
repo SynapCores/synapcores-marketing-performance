@@ -6,6 +6,7 @@ import {
 import { Link2, Megaphone, Users } from 'lucide-react';
 import { requireSession } from '@/lib/session';
 import { signOut } from '@/lib/auth';
+import { TimeZonePicker } from '@/components/TimeZonePicker';
 
 export default async function AuthedLayout({
   children,
@@ -47,6 +48,9 @@ export default async function AuthedLayout({
       signOutAction={doSignOut}
     >
       <div className="mx-auto w-full max-w-[1400px] px-4 py-6 md:px-8">
+        <div className="mb-3 flex justify-end">
+          <TimeZonePicker />
+        </div>
         {children}
         <footer className="mt-10 border-t border-border pt-4 text-[11px] text-muted-foreground">
           IP geolocation and network data by{' '}

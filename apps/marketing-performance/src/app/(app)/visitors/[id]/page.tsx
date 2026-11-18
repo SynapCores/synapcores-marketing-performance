@@ -3,6 +3,7 @@ import { AppPageHeader, Card, CardContent, CardDescription, CardHeader, CardTitl
 import { requireSession } from '@/lib/session';
 import { visitorContext, visitorEvents } from '@/lib/event-store';
 import { visitorSource } from '@/lib/visitor/source';
+import { LocalTime } from '@/components/LocalTime';
 import { GEO_ATTRIBUTION, KindBadge, flag, place, when } from '../format';
 
 export const dynamic = 'force-dynamic';
@@ -64,7 +65,7 @@ export default async function VisitorDetailPage({ params }: { params: Promise<{ 
     ['Campaign (first)', [s(first.utm_campaign), s(first.utm_term), s(first.utm_content)].filter(Boolean).join(' · ') || '—'],
     ['UTM touches', touches.length ? touches.map((t) => `${when(t.first_at)}: ${[t.utm_source, t.utm_medium, t.utm_campaign, t.utm_content].map((x) => x ?? '—').join(' / ')}`).join(' · ') : '—'],
     ['Click ids', [['gclid', first.gclid], ['fbclid', first.fbclid], ['ttclid', first.ttclid], ['msclkid', first.msclkid]].filter(([, v]) => s(v)).map(([k]) => k).join(', ') || '—'],
-    ['First / last seen', `${when(first.occurred_at)} → ${when(last.occurred_at)}`],
+    ['First / last seen', <span key="seen">{when(first.occurred_at)} → {when(last.occurred_at)}</span>],
     ['Activity', `${events.length} events · ${sessions.size} session${sessions.size === 1 ? '' : 's'}`],
   ];
 
@@ -100,13 +101,13 @@ export default async function VisitorDetailPage({ params }: { params: Promise<{ 
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs uppercase text-muted-foreground">
-                  <th className="py-2 pr-3">Time (UTC)</th><th className="pr-3">Event</th><th className="pr-3">Page</th><th className="pr-3">Referrer</th><th>Details</th>
+                  <th className="py-2 pr-3">Time</th><th className="pr-3">Event</th><th className="pr-3">Page</th><th className="pr-3">Referrer</th><th>Details</th>
                 </tr>
               </thead>
               <tbody>
                 {evs.map((e) => (
                   <tr key={String(e.event_id)} className="border-t border-border align-top">
-                    <td className="whitespace-nowrap py-1.5 pr-3 font-mono text-xs">{String(e.occurred_at ?? '').replace('T', ' ').slice(0, 19)}</td>
+                    <td className="whitespace-nowrap py-1.5 pr-3 font-mono text-xs"><LocalTime value={e.occurred_at == null ? null : String(e.occurred_at)} zoneName={false} /></td>
                     <td className="pr-3"><span className="rounded bg-muted px-1.5 py-0.5 text-xs">{s(e.event_type)}</span></td>
                     <td className="pr-3">
                       <div className="max-w-[320px] truncate" title={s(e.page_url) ?? ''}>{s(e.page_path) ?? '—'}</div>
