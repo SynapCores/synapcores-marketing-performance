@@ -624,12 +624,18 @@
           }
         });
         
-        // Handle page unload
+        // Handle page unload. pagehide also covers iOS Safari / bfcache, where
+        // beforeunload often doesn't fire; page_exit is sent once per page.
         try {
-          window.addEventListener('beforeunload', () => {
+          let exited = false;
+          const onExit = () => {
+            if (exited) return;
+            exited = true;
             EcommTracker.track('page_exit');
-            this.processEvents(true); // Force send events
-          });
+            this.processEvents(true); // Force send events (beacon)
+          };
+          window.addEventListener('beforeunload', onExit);
+          window.addEventListener('pagehide', onExit);
         } catch (error) {
           utils.log('Error setting up beforeunload listener:', error);
         }
@@ -1084,6 +1090,17 @@
         // have been trimmed or appended to while the request was in flight).
         state.eventQueue = state.eventQueue.filter(function(e) { return eventsToProcess.indexOf(e) === -1; });
       };
+      // Final flush on page exit: an XHR started now is cancelled by the
+      // navigation, so hand the batch to the browser with sendBeacon
+      // (text/plain = no CORS preflight; the collector parses the body as JSON).
+      if (forceAll && typeof navigator !== 'undefined' && navigator.sendBeacon && typeof Blob !== 'undefined') {
+        try {
+          if (navigator.sendBeacon(config.endpoint, new Blob([JSON.stringify(payload)], { type: 'text/plain;charset=UTF-8' }))) {
+            removeSent();
+            return;
+          }
+        } catch (e) { /* fall back to XHR */ }
+      }
       state.inFlight = true;
       this.sendPayload(payload).then(function() {
         state.inFlight = false;

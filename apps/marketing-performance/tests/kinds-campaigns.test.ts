@@ -216,3 +216,34 @@ test('track.js: an SPA hands over its original landing URL (address already rewr
   q.flush();
   assert.equal(q.sent[0]!.events[0]!.data.url, 'https://werkor.us/');
 });
+
+test('track.js: on page exit the queue goes out with sendBeacon (an XHR would be cancelled), page_exit once', () => {
+  const beacons: Array<{ url: string; body: string }> = [];
+  const handlers = new Map<string, Array<() => void>>();
+  const xhrs: string[] = [];
+  class FakeXHR { status = 200; onload: (() => void) | null = null; onerror: (() => void) | null = null; open() {} setRequestHeader() {} getResponseHeader() { return null; } send(b: string) { xhrs.push(b); } }
+  const noop = () => {};
+  const el = () => ({ addEventListener: noop, querySelector: () => null, querySelectorAll: () => [], getAttribute: () => null });
+  class FakeBlob { constructor(readonly parts: string[], readonly opts: { type: string }) {} }
+  const sandbox: Record<string, unknown> = {
+    location: { href: 'https://werkor.us/app', pathname: '/app', search: '', hostname: 'werkor.us', origin: 'https://werkor.us' },
+    document: { currentScript: null, readyState: 'complete', title: 't', referrer: '', cookie: '', addEventListener: noop, querySelector: () => null, querySelectorAll: () => [], body: el(), documentElement: { lang: 'en' }, createElement: el, getElementsByTagName: () => [] },
+    innerWidth: 1, innerHeight: 1, screen: { width: 1, height: 1 },
+    addEventListener: (name: string, fn: () => void) => { const l = handlers.get(name) ?? []; l.push(fn); handlers.set(name, l); },
+    navigator: { userAgent: 'test', language: 'en', sendBeacon: (url: string, blob: FakeBlob) => { beacons.push({ url, body: blob.parts.join('') }); return true; } },
+    Blob: FakeBlob, XMLHttpRequest: FakeXHR, URL,
+    setInterval: () => 1, setTimeout: () => 1, clearTimeout: noop, clearInterval: noop,
+    console, Date, Math, JSON, Intl, Promise, Set, Object, Array, String, Number, parseInt, parseFloat,
+    IntersectionObserver: class { observe() {} disconnect() {} }, MutationObserver: class { observe() {} disconnect() {} },
+  };
+  sandbox.window = sandbox;
+  vm.runInNewContext(SRC, sandbox);
+  const T = sandbox.EcommTracker as { init(c: object): void };
+  T.init({ endpoint: 'https://m.example/api/v1/collect', siteId: 'pk_x', automaticEvents: true, autoTrackProductViews: false, autoTrackAddToCart: false, autoTrackCheckout: false, autoTrackPurchase: false });
+  for (const fn of handlers.get('pagehide') ?? []) fn();
+  for (const fn of handlers.get('beforeunload') ?? []) fn();
+  assert.equal(xhrs.length, 0);
+  assert.equal(beacons.length, 1);
+  const names = (JSON.parse(beacons[0]!.body) as { events: Array<{ name: string }> }).events.map((e) => e.name);
+  assert.deepEqual(names, ['pageview', 'page_exit']);
+});
