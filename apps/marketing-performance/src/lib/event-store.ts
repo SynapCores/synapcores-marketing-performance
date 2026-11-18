@@ -1,4 +1,5 @@
 import 'server-only';
+import { zonedDayStartUtc } from './timezone';
 import { getAdminClient } from '@synapcores/app-framework/db/server';
 import { PM_EVENTS_ADDED_COLUMNS, PM_EVENTS_DDL, PM_EVENT_COLUMNS, sqlTs, type PmEventRow } from './visitor/events';
 import { CLASSIFIER_VERSION, classifyVisitor, type Classification } from './visitor/classify';
@@ -83,6 +84,8 @@ export interface VisitorFilters {
   utm_source?: string | null;
   utm_medium?: string | null;
   utm_campaign?: string | null;
+  /** IANA zone the from/to days are in (the viewer's display zone); default UTC. */
+  tz?: string | null;
 }
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -96,8 +99,10 @@ function whereClause(tenantId: string, f: VisitorFilters): { sql: string; params
   };
   if (f.site) add('site = ?', f.site);
   if (f.country) add('country = ?', f.country.toUpperCase());
-  if (f.from && DAY.test(f.from)) add('occurred_at >= ?', `${f.from} 00:00:00`);
-  if (f.to && DAY.test(f.to)) add('occurred_at <= ?', `${f.to} 23:59:59`);
+  // Day filters are the viewer's local days, converted to UTC bounds.
+  const tz = f.tz || 'UTC';
+  if (f.from && DAY.test(f.from)) add('occurred_at >= ?', zonedDayStartUtc(f.from, tz));
+  if (f.to && DAY.test(f.to)) add('occurred_at < ?', zonedDayStartUtc(f.to, tz, 1));
   return { sql: parts.join(' AND '), params };
 }
 
@@ -352,7 +357,7 @@ export async function kindCounts(tenantId: string, sinceTs: string | null, site?
 }
 
 // ── UTM campaigns ────────────────────────────────────────────────────────────
-async function utmTouches(tenantId: string, f: { site?: string | null; from?: string | null; to?: string | null } | null): Promise<TouchRow[]> {
+async function utmTouches(tenantId: string, f: { site?: string | null; from?: string | null; to?: string | null; tz?: string | null } | null): Promise<TouchRow[]> {
   const params: unknown[] = [tenantId];
   const parts = ['tenant_id = $1', '(utm_source IS NOT NULL OR utm_campaign IS NOT NULL)'];
   const add = (cond: string, v: unknown) => {
@@ -360,8 +365,8 @@ async function utmTouches(tenantId: string, f: { site?: string | null; from?: st
     parts.push(cond.replace('?', `$${params.length}`));
   };
   if (f?.site) add('site = ?', f.site);
-  if (f?.from && DAY.test(f.from)) add('occurred_at >= ?', `${f.from} 00:00:00`);
-  if (f?.to && DAY.test(f.to)) add('occurred_at <= ?', `${f.to} 23:59:59`);
+  if (f?.from && DAY.test(f.from)) add('occurred_at >= ?', zonedDayStartUtc(f.from, f.tz || 'UTC'));
+  if (f?.to && DAY.test(f.to)) add('occurred_at < ?', zonedDayStartUtc(f.to, f.tz || 'UTC', 1));
   const r = await db().sql<Row>(
     `SELECT site, utm_source, utm_medium, utm_campaign, utm_content, anonymous_id, session_id, MIN(occurred_at) AS first_at,
             SUM(CASE WHEN event_type = 'pageview' OR event_type = 'page_view' THEN 1 ELSE 0 END) AS pageviews
@@ -378,7 +383,7 @@ async function utmTouches(tenantId: string, f: { site?: string | null; from?: st
 
 const CONVERSION_TYPES = FUNNEL_STEPS.filter((s) => s.conversion).flatMap((s) => [...s.names]);
 
-export interface CampaignFilters { kind?: KindFilter; site?: string | null; from?: string | null; to?: string | null }
+export interface CampaignFilters { kind?: KindFilter; site?: string | null; from?: string | null; to?: string | null; tz?: string | null }
 
 export async function campaignReport(tenantId: string, f: CampaignFilters): Promise<CampaignReportRow[]> {
   await Promise.all([ensureEventsTable(), ensureCampaignsTable()]);

@@ -24,3 +24,15 @@ test('timestamp detection for the table explorer', () => {
   assert.ok(!looksLikeTimestamp('fb_spring_sale'));
   assert.ok(!looksLikeTimestamp(42));
 });
+
+test('local day → UTC bounds for date filters (DST-aware)', () => {
+  const { zonedDayStartUtc } = require('../src/lib/timezone') as typeof import('../src/lib/timezone');
+  assert.equal(zonedDayStartUtc('2026-11-18', 'America/New_York'), '2026-11-18 05:00:00');
+  assert.equal(zonedDayStartUtc('2026-11-18', 'America/New_York', 1), '2026-11-19 05:00:00');
+  assert.equal(zonedDayStartUtc('2026-07-01', 'America/New_York'), '2026-07-01 04:00:00');
+  assert.equal(zonedDayStartUtc('2026-11-01', 'America/New_York'), '2026-11-01 04:00:00'); // DST ends that day
+  assert.equal(zonedDayStartUtc('2026-11-18', 'Asia/Kolkata'), '2026-11-17 18:30:00');
+  assert.equal(zonedDayStartUtc('2026-11-18', 'UTC'), '2026-11-18 00:00:00');
+  assert.equal(zonedDayStartUtc('2026-11-18', 'Not/AZone'), '2026-11-18 00:00:00');
+  assert.equal(zonedDayStartUtc('nope', 'UTC'), null);
+});

@@ -32,3 +32,40 @@ export function formatInZone(d: Date, tz: string, opts: { seconds?: boolean; zon
   return opts.zoneName === false ? base : `${base} ${get('timeZoneName')}`;
 }
 
+
+/** Offset of `tz` from UTC at instant `ms`, in minutes (New York in winter → -300). */
+export function zoneOffsetMinutes(ms: number, tz: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(ms));
+  const n = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+  const asUtc = Date.UTC(n('year'), n('month') - 1, n('day'), n('hour'), n('minute'), n('second'));
+  return Math.round((asUtc - Math.floor(ms / 1000) * 1000) / 60000);
+}
+
+export function isValidTimeZone(tz: unknown): tz is string {
+  if (typeof tz !== 'string' || !tz || tz.length > 64) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Local midnight of `day` (YYYY-MM-DD) in `tz`, as an engine UTC timestamp
+ * ('YYYY-MM-DD HH:MM:SS'). `addDays` shifts the day first (1 → next midnight,
+ * used as an exclusive upper bound for an inclusive "to" date).
+ */
+export function zonedDayStartUtc(day: string, tz: string, addDays = 0): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return null;
+  const wall = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + addDays);
+  const zone = isValidTimeZone(tz) ? tz : 'UTC';
+  // Two passes settle the offset across DST changes.
+  let ms = wall - zoneOffsetMinutes(wall, zone) * 60000;
+  ms = wall - zoneOffsetMinutes(ms, zone) * 60000;
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}

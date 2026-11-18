@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useSyncExternalStore } from 'react';
-import { browserTimeZone, readTzPref, subscribeTz, writeTzPref } from './LocalTime';
+import { browserTimeZone, readTzPref, subscribeTz, useDisplayTimeZone, writeTzPref } from './LocalTime';
 
 const COMMON = [
   'UTC',
@@ -52,4 +52,10 @@ export function TimeZonePicker() {
       </select>
     </label>
   );
+}
+
+/** Hidden form field carrying the viewer's display zone, so date filters use local days. */
+export function TzField() {
+  const tz = useDisplayTimeZone();
+  return <input type="hidden" name="tz" value={tz ?? 'UTC'} />;
 }

@@ -15,6 +15,7 @@
  */
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { browserTimeZone, readTzPref } from './LocalTime';
 
 export type FilterField =
   | { name: string; label: string; type: 'select'; options: Array<{ value: string; label: string }>; defaultValue?: string }
@@ -22,13 +23,22 @@ export type FilterField =
 
 const storeKey = (report: string) => `mp:filters:${report}`;
 
-export function filterQuery(fields: FilterField[], values: Record<string, string>): string {
+export function filterQuery(fields: FilterField[], values: Record<string, string>, tz?: string): string {
   const q = new URLSearchParams();
+  let hasDate = false;
   for (const f of fields) {
     const v = (values[f.name] ?? '').trim();
-    if (v) q.set(f.name, v);
+    if (v) { q.set(f.name, v); if (f.type === 'date') hasDate = true; }
   }
+  // Date filters are the viewer's local days: send the display zone along.
+  if (hasDate && tz) q.set('tz', tz);
   return q.toString();
+}
+
+/** The viewer's display time zone (picker choice, else the browser's). */
+function displayTz(): string {
+  const p = readTzPref();
+  return p === 'auto' ? browserTimeZone() : p;
 }
 
 export default function FilterBar({ report, fields, summary }: { report: string; fields: FilterField[]; summary?: React.ReactNode }) {
@@ -63,7 +73,7 @@ export default function FilterBar({ report, fields, summary }: { report: string;
       const raw = localStorage.getItem(storeKey(report));
       if (!raw) return;
       const vals = JSON.parse(raw) as Record<string, string>;
-      const q = filterQuery(fields, vals);
+      const q = filterQuery(fields, vals, displayTz());
       if (q) {
         setRestoring(true);
         router.replace(`${pathname}?${q}`, { scroll: false });
@@ -78,7 +88,7 @@ export default function FilterBar({ report, fields, summary }: { report: string;
     const fd = new FormData(e.currentTarget);
     const vals: Record<string, string> = {};
     for (const f of fields) vals[f.name] = String(fd.get(f.name) ?? '');
-    const q = filterQuery(fields, vals);
+    const q = filterQuery(fields, vals, displayTz());
     try { localStorage.setItem(storeKey(report), JSON.stringify(vals)); } catch { /* ignore */ }
     router.push(q ? `${pathname}?${q}` : pathname, { scroll: false });
   }

@@ -27,7 +27,7 @@ export default async function UtmCampaignsPage({ searchParams }: { searchParams:
   }
   const sp = await searchParams;
   const kind = parseKind(one(sp.kind));
-  const f = { kind, site: one(sp.site) || null, from: one(sp.from) || null, to: one(sp.to) || null };
+  const f = { kind, site: one(sp.site) || null, from: one(sp.from) || null, to: one(sp.to) || null, tz: one(sp.tz) || null };
   const [rows, opts] = await Promise.all([campaignReport(tenantId, f), filterOptions(tenantId)]);
   const fields: FilterField[] = [
     { name: 'kind', label: 'Type', type: 'select', defaultValue: 'human', options: KIND_OPTIONS },
@@ -105,7 +105,7 @@ export default async function UtmCampaignsPage({ searchParams }: { searchParams:
                     <td className="pr-3 text-right tabular-nums">{r.signups}</td>
                     <td className="pr-3 text-right tabular-nums">{r.purchases}</td>
                     <td className="pr-3 text-right tabular-nums text-muted-foreground">{r.excluded}</td>
-                    <td className="whitespace-nowrap text-xs">{r.last_seen ? when(r.last_seen) : r.saved ? `created ${when(r.saved.created_at)}` : '—'}</td>
+                    <td className="whitespace-nowrap text-xs">{r.last_seen ? when(r.last_seen) : r.saved ? <>created {when(r.saved.created_at)}</> : '—'}</td>
                   </tr>
                 ))}
               </tbody>

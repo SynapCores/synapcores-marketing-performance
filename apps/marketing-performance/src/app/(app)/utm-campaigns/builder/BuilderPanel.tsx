@@ -5,6 +5,7 @@ import { createCampaignAction, deleteCampaignAction } from '@/lib/campaign-actio
 import { buildCampaignUrl, CHANNELS } from '@/lib/visitor/campaign-links';
 import type { SavedCampaign } from '@/lib/visitor/campaigns';
 import CopyButton from '@/components/CopyButton';
+import { LocalTime } from '@/components/LocalTime';
 
 const input = 'w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm';
 
@@ -135,7 +136,7 @@ export default function BuilderPanel({ campaigns, sites, canEdit }: { campaigns:
           {campaigns.map((c) => (
             <div key={c.campaign_id} className="rounded-md border border-border p-3 text-sm">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <div className="font-medium">{c.name} <span className="text-xs font-normal text-muted-foreground">· {c.channel ?? 'other'} · {c.site} · created {c.created_at.slice(0, 10)}</span></div>
+                <div className="font-medium">{c.name} <span className="text-xs font-normal text-muted-foreground">· {c.channel ?? 'other'} · {c.site} · created <LocalTime value={c.created_at} seconds={false} /></span></div>
                 <div className="flex gap-2">
                   <CopyButton text={c.tagged_url} label="Copy link" />
                   {canEdit && <button type="button" onClick={() => remove(c.campaign_id, c.name)} className="rounded border border-border px-2 py-0.5 text-xs text-rose-500 hover:bg-muted">Delete</button>}

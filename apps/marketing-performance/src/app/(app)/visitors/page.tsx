@@ -32,6 +32,7 @@ export default async function VisitorsPage({ searchParams }: { searchParams: Pro
     utm_source: one(sp.utm_source) || null,
     utm_medium: one(sp.utm_medium) || null,
     utm_campaign: one(sp.utm_campaign) || null,
+    tz: one(sp.tz) || null,
   };
   const [visitors, opts] = await Promise.all([listVisitors(tenantId, filters, 200), filterOptions(tenantId)]);
   const counts = { human: 0, internal: 0, suspected: 0, bot: 0 };

@@ -63,7 +63,7 @@ export default async function VisitorDetailPage({ params }: { params: Promise<{ 
     ['First touch', `${visitorSource(first)} → ${s(first.site) ?? ''}${s(first.page_path) ?? ''}`],
     ['Referrer (first)', s(first.referrer) ?? '—'],
     ['Campaign (first)', [s(first.utm_campaign), s(first.utm_term), s(first.utm_content)].filter(Boolean).join(' · ') || '—'],
-    ['UTM touches', touches.length ? touches.map((t) => `${when(t.first_at)}: ${[t.utm_source, t.utm_medium, t.utm_campaign, t.utm_content].map((x) => x ?? '—').join(' / ')}`).join(' · ') : '—'],
+    ['UTM touches', touches.length ? <span key="touches">{touches.map((t, i) => <span key={i}>{i > 0 ? ' · ' : ''}{when(t.first_at)}: {[t.utm_source, t.utm_medium, t.utm_campaign, t.utm_content].map((x) => x ?? '—').join(' / ')}</span>)}</span> : '—'],
     ['Click ids', [['gclid', first.gclid], ['fbclid', first.fbclid], ['ttclid', first.ttclid], ['msclkid', first.msclkid]].filter(([, v]) => s(v)).map(([k]) => k).join(', ') || '—'],
     ['First / last seen', <span key="seen">{when(first.occurred_at)} → {when(last.occurred_at)}</span>],
     ['Activity', `${events.length} events · ${sessions.size} session${sessions.size === 1 ? '' : 's'}`],
