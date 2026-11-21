@@ -65,12 +65,12 @@ export function TopBar({
             </div>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
-              <Link href="/settings/profile" className="w-full">
+              <Link prefetch={false} href="/settings/profile" className="w-full">
                 Profile
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
-              <Link href="/settings" className="w-full">
+              <Link prefetch={false} href="/settings" className="w-full">
                 Settings
               </Link>
             </DropdownMenuItem>

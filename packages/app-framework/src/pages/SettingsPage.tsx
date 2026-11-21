@@ -58,7 +58,7 @@ export default function SettingsPage() {
       />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {cards.map((c) => (
-          <Link key={c.href} href={c.href} className="block">
+          <Link key={c.href} prefetch={false} href={c.href} className="block">
             <Card className="hover:border-primary/40 transition-colors h-full">
               <CardHeader className="flex-row items-start gap-3">
                 {c.icon}

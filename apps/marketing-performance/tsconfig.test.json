@@ -21,6 +21,8 @@
     "src/lib/visitor/**/*.ts",
     "src/lib/collector.ts",
     "src/lib/timezone.ts",
+    "src/lib/query-cache.ts",
+    "src/lib/recipe-sql.ts",
     "src/app/hydration-gate.ts"
   ]
 }

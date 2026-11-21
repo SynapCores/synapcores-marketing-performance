@@ -42,7 +42,7 @@ export function SortHeader({
   q.set('dir', next);
   return (
     <th className={`${align === 'right' ? 'text-right' : ''} ${className}`} title={title} aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : undefined}>
-      <Link href={`?${q}`} scroll={false} className={`inline-flex items-center gap-1 hover:text-foreground ${active ? 'text-foreground' : ''}`}>
+      <Link prefetch={false} href={`?${q}`} scroll={false} className={`inline-flex items-center gap-1 hover:text-foreground ${active ? 'text-foreground' : ''}`}>
         {label}
         <span aria-hidden className={active ? '' : 'opacity-30'}>{active && dir === 'asc' ? '▲' : '▼'}</span>
       </Link>

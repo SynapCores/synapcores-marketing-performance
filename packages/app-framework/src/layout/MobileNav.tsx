@@ -61,6 +61,7 @@ export function MobileNav({
             <div className="h-14 flex items-center justify-between gap-2 pl-5 pr-2 border-b border-border">
               <DialogPrimitive.Title asChild>
                 <Link
+                  prefetch={false}
                   href={brand.href}
                   onClick={close}
                   className="font-headline text-lg font-bold tracking-tight text-foreground truncate"
@@ -87,6 +88,7 @@ export function MobileNav({
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>
       <Link
+        prefetch={false}
         href={brand.href}
         className="font-headline text-base font-bold tracking-tight text-foreground truncate max-w-[55vw]"
       >

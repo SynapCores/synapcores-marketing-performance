@@ -1,5 +1,6 @@
 import 'server-only';
 import { getAdminClient } from '@synapcores/app-framework/db/server';
+import { invalidateReports, reportDb } from './report-db';
 import { SCHEMA, TABLES, SEED, ATTRIBUTION, SCORECARD, QUERIES, AGENT_TASK } from './recipe-sql';
 import { SOURCES, mapRows } from './sources';
 
@@ -8,6 +9,10 @@ import { SOURCES, mapRows } from './sources';
  * Platform ad spend, first-party clickstream, identity, conversions, orders and
  * the ad creative (as 384-dim embeddings) all live in SynapCores. Attribution
  * and the 90-day LTV scorecard are derived with live SQL.
+ *
+ * The recipe tables are shared by every workspace, so any write here clears the
+ * whole report cache (invalidateReports() with no tenant). Reads take the
+ * viewer's tenant id only to key the cache (see report-db.ts).
  */
 
 const db = () => getAdminClient();
@@ -29,51 +34,73 @@ export const TABLE_META: Record<string, { label: string; group: string; desc: st
 export async function ensureSchema() { for (const ddl of SCHEMA) await run(ddl); }
 
 export async function clearAll() {
-  for (const t of TABLES) { try { await run(`DROP TABLE IF EXISTS ${t}`); } catch { /* ignore */ } }
+  try {
+    for (const t of TABLES) { try { await run(`DROP TABLE IF EXISTS ${t}`); } catch { /* ignore */ } }
+  } finally {
+    invalidateReports();
+  }
 }
 
 /** Recompute attribution + scorecard from the base tables (Steps 7 & 10). */
 export async function rebuildDerived() {
-  await run(`DROP TABLE IF EXISTS recipe_pm_attribution`);
-  await run(`DROP TABLE IF EXISTS recipe_pm_campaign_scorecard`);
-  await ensureSchema();
-  await run(ATTRIBUTION);
-  await run(SCORECARD);
+  try {
+    await run(`DROP TABLE IF EXISTS recipe_pm_attribution`);
+    await run(`DROP TABLE IF EXISTS recipe_pm_campaign_scorecard`);
+    await ensureSchema();
+    await run(ATTRIBUTION);
+    await run(SCORECARD);
+  } finally {
+    invalidateReports();
+  }
 }
 
 /** One-click: wipe, recreate, seed the recipe-121 sample dataset, rebuild derived. */
 export async function loadSampleData() {
-  await clearAll();
-  await ensureSchema();
-  for (const stmt of SEED) await run(stmt);
-  await run(ATTRIBUTION);
-  await run(SCORECARD);
+  try {
+    await clearAll();
+    await ensureSchema();
+    for (const stmt of SEED) await run(stmt);
+    await run(ATTRIBUTION);
+    await run(SCORECARD);
+  } finally {
+    invalidateReports();
+  }
 }
 
 // ── ingestion ────────────────────────────────────────────────────────────────
-/** Insert parsed rows (array of objects) into a warehouse table. Chunked. */
-export async function ingestRows(table: string, columns: string[], rows: unknown[][]) {
+/**
+ * Insert parsed rows (array of objects) into a warehouse table. Chunked.
+ * Clears the report cache afterwards unless `invalidate` is false (the pixel
+ * collector: its rows show up within the cache TTL).
+ */
+export async function ingestRows(table: string, columns: string[], rows: unknown[][], opts: { invalidate?: boolean } = {}) {
   if (!rows.length) return 0;
-  await ensureSchema();
-  const chunk = 200;
-  let n = 0;
-  for (let i = 0; i < rows.length; i += chunk) {
-    const slice = rows.slice(i, i + chunk);
-    const values = slice.map((r) => '(' + r.map((v) => sqlLit(v)).join(',') + ')').join(',');
-    await run(`INSERT INTO ${table} (${columns.join(',')}) VALUES ${values}`);
-    n += slice.length;
+  try {
+    await ensureSchema();
+    const chunk = 200;
+    let n = 0;
+    for (let i = 0; i < rows.length; i += chunk) {
+      const slice = rows.slice(i, i + chunk);
+      const values = slice.map((r) => '(' + r.map((v) => sqlLit(v)).join(',') + ')').join(',');
+      await run(`INSERT INTO ${table} (${columns.join(',')}) VALUES ${values}`);
+      n += slice.length;
+    }
+    // creative embeddings are populated on ingest
+    if (table === 'recipe_pm_creative') {
+      await run(`UPDATE recipe_pm_creative SET angle = EMBED(headline || ' ' || body_copy) WHERE angle IS NULL`);
+    }
+    return n;
+  } finally {
+    if (opts.invalidate !== false) invalidateReports();
   }
-  // creative embeddings are populated on ingest
-  if (table === 'recipe_pm_creative') {
-    await run(`UPDATE recipe_pm_creative SET angle = EMBED(headline || ' ' || body_copy) WHERE angle IS NULL`);
-  }
-  return n;
 }
 
 /**
  * Ingest an array of source-shaped objects into a named source's warehouse
  * table, auto-numbering the primary key from the current max so callers may
- * omit it. Shared by the ETL REST route and the first-party beacon collector.
+ * omit it. Used by the first-party beacon collector, so it doesn't clear the
+ * report cache (beacon data shows up within the cache TTL; the coalesced
+ * rebuildDerived() that follows does clear it).
  * Returns the number of rows written (0 for an empty or unknown source).
  */
 export async function ingestSource(sourceId: string, records: Array<Record<string, unknown>>): Promise<number> {
@@ -86,7 +113,7 @@ export async function ingestSource(sourceId: string, records: Array<Record<strin
     if (typeof max === 'number') startId = max + 1;
   } catch { /* text-keyed tables ignore startId */ }
   const rows = mapRows(def, records, startId);
-  return ingestRows(def.table, def.columns, rows);
+  return ingestRows(def.table, def.columns, rows, { invalidate: false });
 }
 
 function sqlLit(v: unknown): string {
@@ -100,26 +127,30 @@ function sqlLit(v: unknown): string {
 export type Row = Record<string, unknown>;
 
 type TableMetaEntry = (typeof TABLE_META)[string] | undefined;
-export async function listTables(): Promise<Array<{ table: string; count: number; meta: TableMetaEntry }>> {
+type TenantId = string | null | undefined;
+
+export async function listTables(tenantId: TenantId): Promise<Array<{ table: string; count: number; meta: TableMetaEntry }>> {
+  const rdb = reportDb(tenantId);
   const out: Array<{ table: string; count: number; meta: TableMetaEntry }> = [];
   for (const t of TABLES) {
     let count = 0;
-    try { count = Number((await db().sqlScalar<number>(`SELECT COUNT(*) FROM ${t}`)) ?? 0); }
+    try { count = Number((await rdb.sqlScalar<number>(`SELECT COUNT(*) FROM ${t}`)) ?? 0); }
     catch { count = -1; } // table not created yet
     out.push({ table: t, count, meta: TABLE_META[t] });
   }
   return out;
 }
 
-export async function tableRows(table: string, limit = 200): Promise<{ columns: string[]; rows: Row[] }> {
+export async function tableRows(tenantId: TenantId, table: string, limit = 200): Promise<{ columns: string[]; rows: Row[] }> {
   if (!TABLES.includes(table)) throw new Error('unknown table');
-  const res = await db().sql<Row>(`SELECT * FROM ${table} LIMIT ${limit}`);
+  const res = await reportDb(tenantId).sql<Row>(`SELECT * FROM ${table} LIMIT ${limit}`);
   return { columns: res.columns, rows: res.rows };
 }
 
-export async function kpis() {
-  const k = (await db().sql<Row>(QUERIES.kpis)).rows[0] ?? {};
-  const sc = (await db().sql<Row>(QUERIES.scorecard)).rows;
+export async function kpis(tenantId: TenantId) {
+  const rdb = reportDb(tenantId);
+  const k = (await rdb.sql<Row>(QUERIES.kpis)).rows[0] ?? {};
+  const sc = (await rdb.sql<Row>(QUERIES.scorecard)).rows;
   const platforms = new Set(sc.map((r) => r.platform)).size;
   const total = Number(k.total_spend ?? 0), cust = Number(k.new_customers ?? 0);
   return {
@@ -131,10 +162,11 @@ export async function kpis() {
   };
 }
 
-export const scorecard = async () => (await db().sql<Row>(QUERIES.scorecard)).rows;
-export const clickTruth = async () => (await db().sql<Row>(QUERIES.clickTruth)).rows;
-export const creativeAngle = async () => (await db().sql<Row>(QUERIES.creativeAngle)).rows;
-export const attribution = async () => (await db().sql<Row>(QUERIES.attribution)).rows;
+// Without a tenant id (the recommendation fallback) these run uncached.
+export const scorecard = async (tenantId?: TenantId) => (await reportDb(tenantId).sql<Row>(QUERIES.scorecard)).rows;
+export const clickTruth = async (tenantId: TenantId) => (await reportDb(tenantId).sql<Row>(QUERIES.clickTruth)).rows;
+export const creativeAngle = async (tenantId: TenantId) => (await reportDb(tenantId).sql<Row>(QUERIES.creativeAngle)).rows;
+export const attribution = async (tenantId: TenantId) => (await reportDb(tenantId).sql<Row>(QUERIES.attribution)).rows;
 
 /** Step 12 — AGENT_RUN budget recommendation, with a deterministic fallback. */
 export async function recommend(): Promise<{ source: 'agent_run' | 'fallback'; text: string; tookMs: number; reason?: string }> {

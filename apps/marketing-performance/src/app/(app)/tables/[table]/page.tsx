@@ -8,12 +8,12 @@ import { LocalTime, looksLikeTimestamp } from '@/components/LocalTime';
 export const dynamic = 'force-dynamic';
 
 export default async function TableBrowsePage({ params }: { params: Promise<{ table: string }> }) {
-  await requireSession();
+  const session = await requireSession();
   const { table } = await params;
   if (!TABLES.includes(table)) notFound();
 
   const meta = TABLE_META[table];
-  const { columns, rows } = await tableRows(table, 500);
+  const { columns, rows } = await tableRows(session.tenant?.id, table, 500);
 
   // The `angle` embedding column is 384 floats — summarize instead of dumping it.
   const displayCols = columns.filter((c) => c !== 'angle');

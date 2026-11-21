@@ -12,10 +12,35 @@
  *    CRAWLER_RANGES_REFRESH_HOURS (default 24). After the boot refresh, stored
  *    events classified by an older rule version are reclassified (backfill).
  *    CRAWLER_RANGES_REFRESH=off keeps the cached/bundled lists.
+ *
+ * 3. Report query cache (lib/report-db.ts): logs its settings at boot and its
+ *    hit/miss counters every 15 min when there was report traffic.
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
   if (!process.env.SYNAPCORES_ADMIN_API_KEY) return; // build / tooling context
+
+  {
+    const { reportCache } = await import('./lib/report-db');
+    const c = reportCache();
+    console.log(
+      c.enabled
+        ? `[report-cache] on: ttl ${c.ttlMs} ms, max ${c.maxEntries} entries / ${(c.maxBytes / 1048576).toFixed(1)} MiB (entry cap ${(c.maxEntryBytes / 1048576).toFixed(1)} MiB)`
+        : '[report-cache] off (QUERY_CACHE_TTL_MS=0)',
+    );
+    let seen = '';
+    const logStats = () => {
+      const s = c.stats();
+      const sig = `${s.hits}/${s.misses}`;
+      if (sig === seen) return;
+      seen = sig;
+      console.log(
+        `[report-cache] hits ${s.hits}, misses ${s.misses}, bypassed ${s.bypassed}, entries ${s.entries} (~${(s.bytes / 1048576).toFixed(1)} MiB), evictions ${s.evictions}, too large ${s.tooLarge}, invalidations ${s.invalidations}`,
+      );
+    };
+    const statsTimer = setInterval(logStats, 15 * 60_000);
+    statsTimer.unref?.();
+  }
 
   if (process.env.IP_RETENTION_SWEEP !== 'off') {
     const { truncateExpiredIps } = await import('./lib/event-store');

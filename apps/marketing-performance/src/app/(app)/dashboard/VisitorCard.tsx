@@ -23,7 +23,7 @@ export default async function VisitorCard({ tenantId }: { tenantId: string | nul
     <Card>
       <CardHeader>
         <CardTitle>Visitors — last 30 days</CardTitle>
-        <CardDescription>Humans vs. bots (including AI crawlers) and where your human visitors are. <Link href="/visitors" className="underline">See every visitor →</Link></CardDescription>
+        <CardDescription>Humans vs. bots (including AI crawlers) and where your human visitors are. <Link prefetch={false} href="/visitors" className="underline">See every visitor →</Link></CardDescription>
       </CardHeader>
       <CardContent>
         {totalV === 0 ? (
@@ -31,10 +31,10 @@ export default async function VisitorCard({ tenantId }: { tenantId: string | nul
         ) : (
           <div className="grid gap-6 md:grid-cols-3">
             <div className="space-y-3">
-              <Link href="/visitors?kind=human" className="flex items-baseline justify-between text-sm"><span>Humans</span><span className="text-xl font-bold tabular-nums">{b.humans.visitors}</span></Link>
-              <Link href="/visitors?kind=bot" className="flex items-baseline justify-between text-sm"><span>Bots</span><span className="text-xl font-bold tabular-nums">{b.bots.visitors}</span></Link>
-              <Link href="/visitors?kind=suspected" className="flex items-baseline justify-between text-sm"><span>Suspected bots <span className="text-xs text-muted-foreground">(bursts, data centres)</span></span><span className="font-semibold tabular-nums">{b.suspected.visitors}</span></Link>
-              <Link href="/visitors?kind=internal" className="flex items-baseline justify-between text-sm"><span>Internal <span className="text-xs text-muted-foreground">(our IPs)</span></span><span className="font-semibold tabular-nums">{b.internal.visitors}</span></Link>
+              <Link prefetch={false} href="/visitors?kind=human" className="flex items-baseline justify-between text-sm"><span>Humans</span><span className="text-xl font-bold tabular-nums">{b.humans.visitors}</span></Link>
+              <Link prefetch={false} href="/visitors?kind=bot" className="flex items-baseline justify-between text-sm"><span>Bots</span><span className="text-xl font-bold tabular-nums">{b.bots.visitors}</span></Link>
+              <Link prefetch={false} href="/visitors?kind=suspected" className="flex items-baseline justify-between text-sm"><span>Suspected bots <span className="text-xs text-muted-foreground">(bursts, data centres)</span></span><span className="font-semibold tabular-nums">{b.suspected.visitors}</span></Link>
+              <Link prefetch={false} href="/visitors?kind=internal" className="flex items-baseline justify-between text-sm"><span>Internal <span className="text-xs text-muted-foreground">(our IPs)</span></span><span className="font-semibold tabular-nums">{b.internal.visitors}</span></Link>
               <div className="h-2 w-full overflow-hidden rounded bg-emerald-500/30">
                 <div className="h-full bg-amber-500" style={{ width: `${botPct}%` }} />
               </div>
@@ -46,7 +46,7 @@ export default async function VisitorCard({ tenantId }: { tenantId: string | nul
                 <ul className="space-y-1.5 text-sm">
                   {b.countries.map((c) => (
                     <li key={c.country}>
-                      <Link href={`/visitors?country=${c.country}&kind=human`} className="flex items-center gap-2">
+                      <Link prefetch={false} href={`/visitors?country=${c.country}&kind=human`} className="flex items-center gap-2">
                         <span className="w-32 shrink-0 truncate">{flag(c.country)} {c.country_name}</span>
                         <span className="h-1.5 rounded bg-primary/60" style={{ width: `${(c.visitors / maxC) * 100}%` }} />
                         <span className="ml-auto tabular-nums text-muted-foreground">{c.visitors}</span>

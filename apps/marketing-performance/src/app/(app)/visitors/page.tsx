@@ -81,7 +81,7 @@ export default async function VisitorsPage({ searchParams }: { searchParams: Pro
         <CardContent className="overflow-x-auto pt-6">
           {visitors.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No visitors match. Once a page carrying your pixel is loaded, its visitors show up here within seconds — see <Link href="/settings/pixels" className="underline">Tracking Pixels</Link>.
+              No visitors match. Once a page carrying your pixel is loaded, its visitors show up here within half a minute — see <Link prefetch={false} href="/settings/pixels" className="underline">Tracking Pixels</Link>.
             </p>
           ) : (
             <table className="w-full text-sm">
@@ -102,7 +102,7 @@ export default async function VisitorsPage({ searchParams }: { searchParams: Pro
                 {visitors.map((v) => (
                   <tr key={v.anonymous_id} className="border-t border-border align-top">
                     <td className="py-2 pr-3">
-                      <Link href={`/visitors/${encodeURIComponent(v.anonymous_id)}`} className="font-mono text-xs underline">{v.anonymous_id.slice(0, 8)}…</Link>
+                      <Link prefetch={false} href={`/visitors/${encodeURIComponent(v.anonymous_id)}`} className="font-mono text-xs underline">{v.anonymous_id.slice(0, 8)}…</Link>
                       <div className="mt-1"><KindBadge kind={v.kind} reason={v.kind_reason} isBot={v.is_bot} name={v.bot_name} category={v.bot_category} verified={v.bot_verified} /></div>
                     </td>
                     <td className="pr-3">

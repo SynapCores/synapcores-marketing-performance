@@ -20,7 +20,8 @@ const short = (n: unknown) => String(n ?? '').replace(/_/g, ' ');
 
 export default async function DashboardPage() {
   const session = await requireSession();
-  const k = await kpis();
+  const tenantId = session.tenant?.id;
+  const k = await kpis(tenantId);
 
   if (!k.new_customers) {
     return (
@@ -29,7 +30,7 @@ export default async function DashboardPage() {
         <Card>
           <CardHeader><CardTitle>No campaign data yet</CardTitle>
             <CardDescription>Ingest your ad-platform spend and clickstream, or load the sample dataset to see the full attribution and LTV analysis.</CardDescription></CardHeader>
-          <CardContent><Link href="/ingest"><Button>Go to Ingest Data →</Button></Link></CardContent>
+          <CardContent><Link href="/ingest" prefetch={false}><Button>Go to Ingest Data →</Button></Link></CardContent>
         </Card>
         <VisitorCard tenantId={session.tenant?.id} />
         <FunnelCard tenantId={session.tenant?.id} />
@@ -37,7 +38,7 @@ export default async function DashboardPage() {
     );
   }
 
-  const [sc, clicks, angle] = await Promise.all([scorecard(), clickTruth(), creativeAngle()]);
+  const [sc, clicks, angle] = await Promise.all([scorecard(tenantId), clickTruth(tenantId), creativeAngle(tenantId)]);
   const byDay0 = [...sc].sort((a, b) => Number(b.day0_roas) - Number(a.day0_roas));
   const byLtv = [...sc].sort((a, b) => Number(b.ltv_roas) - Number(a.ltv_roas));
   const rankOf = (arr: Row[], id: unknown) => arr.findIndex((r) => r.campaign_id === id);

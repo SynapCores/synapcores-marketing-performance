@@ -1,6 +1,7 @@
 import 'server-only';
 import { zonedDayStartUtc } from './timezone';
 import { getAdminClient } from '@synapcores/app-framework/db/server';
+import { invalidateReports, reportDb } from './report-db';
 import { PM_EVENTS_ADDED_COLUMNS, PM_EVENTS_DDL, PM_EVENT_COLUMNS, sqlTs, type PmEventRow } from './visitor/events';
 import { CLASSIFIER_VERSION, classifyVisitor, type Classification } from './visitor/classify';
 import type { CrawlerMatcher } from './visitor/crawler-ranges';
@@ -19,6 +20,10 @@ import { randomUUID } from 'node:crypto';
  *
  * Every read takes the workspace's tenant id and filters on it; values from the
  * request go through bound parameters ($n), never string concatenation.
+ *
+ * Report reads go through reportDb(tenantId) (short-lived cache, see
+ * report-db.ts); writes use db() and invalidate. New pixel events (insertEvents)
+ * show up within the cache TTL instead of clearing it on every beacon.
  */
 
 const db = () => getAdminClient();
@@ -67,7 +72,7 @@ export async function truncateExpiredIps(now = new Date()): Promise<{ cutoff: st
   await ensureEventsTable();
   const days = retentionDays();
   const cutoff = retentionCutoff(now, days);
-  const res = await db().sql(truncationSql(cutoff));
+  const res = await db().sql(truncationSql(cutoff)).finally(() => invalidateReports());
   // The engine answers an UPDATE with a single [[count]] row.
   const first = res.rows[0] ? Object.values(res.rows[0] as Row)[0] : undefined;
   const updated = Number(typeof first === 'number' ? first : res.rowCount) || 0;
@@ -149,8 +154,9 @@ export async function listVisitors(tenantId: string, f: VisitorFilters, limit = 
   const w = whereClause(tenantId, f);
   const lim = Math.max(1, Math.min(500, Math.floor(limit)));
   const kindF: KindFilter = f.kind ?? 'all';
+  const rdb = reportDb(tenantId);
   const [agg, ctx] = await Promise.all([
-    db().sql<Row>(
+    rdb.sql<Row>(
       `SELECT anonymous_id, MIN(occurred_at) AS first_seen, MAX(occurred_at) AS last_seen, COUNT(*) AS events,
               COUNT(DISTINCT session_id) AS sessions,
               SUM(CASE WHEN event_type = 'pageview' OR event_type = 'page_view' THEN 1 ELSE 0 END) AS pageviews,
@@ -181,14 +187,14 @@ export async function listVisitors(tenantId: string, f: VisitorFilters, limit = 
   const inList = placeholders(2, ids.length);
   // NB: tenant_id must be in the inner projection — SynapCores CE applies the
   // inner WHERE after projecting a window-function subquery.
-  const latest = await db().sql<Row>(
+  const latest = await rdb.sql<Row>(
     `SELECT * FROM (SELECT tenant_id, anonymous_id, ip, ip_truncated, country, country_name, region, city, browser, browser_version, os,
             device_type, is_bot, bot_name, bot_category, bot_verified, site,
             ROW_NUMBER() OVER (PARTITION BY anonymous_id ORDER BY is_bot DESC, occurred_at DESC) AS rn
        FROM pm_events WHERE tenant_id = $1 AND anonymous_id IN (${inList})) z WHERE rn = 1`,
     [tenantId, ...ids],
   );
-  const first = await db().sql<Row>(
+  const first = await rdb.sql<Row>(
     `SELECT * FROM (SELECT tenant_id, anonymous_id, site, page_path, referrer_domain, utm_source, utm_medium, utm_campaign, utm_content, gclid, fbclid, ttclid, msclkid,
             ROW_NUMBER() OVER (PARTITION BY anonymous_id ORDER BY occurred_at ASC) AS rn
        FROM pm_events WHERE tenant_id = $1 AND anonymous_id IN (${inList})) z WHERE rn = 1`,
@@ -345,7 +351,7 @@ export async function kindCounts(tenantId: string, sinceTs: string | null, site?
     where += ` AND site = $${params.length}`;
   }
   const [r, ctx] = await Promise.all([
-    db().sql<Row>(`SELECT anonymous_id, MAX(CASE WHEN is_bot = TRUE THEN 1 ELSE 0 END) AS any_bot FROM pm_events WHERE ${where} GROUP BY anonymous_id LIMIT ${MAX_VISITORS}`, params),
+    reportDb(tenantId).sql<Row>(`SELECT anonymous_id, MAX(CASE WHEN is_bot = TRUE THEN 1 ELSE 0 END) AS any_bot FROM pm_events WHERE ${where} GROUP BY anonymous_id LIMIT ${MAX_VISITORS}`, params),
     visitorContext(tenantId),
   ]);
   const out: Record<VisitorKind, number> = { human: 0, internal: 0, suspected: 0, bot: 0 };
@@ -367,7 +373,8 @@ async function utmTouches(tenantId: string, f: { site?: string | null; from?: st
   if (f?.site) add('site = ?', f.site);
   if (f?.from && DAY.test(f.from)) add('occurred_at >= ?', zonedDayStartUtc(f.from, f.tz || 'UTC'));
   if (f?.to && DAY.test(f.to)) add('occurred_at < ?', zonedDayStartUtc(f.to, f.tz || 'UTC', 1));
-  const r = await db().sql<Row>(
+  // Unfiltered (f === null) is the visitor-context load, which has its own cache.
+  const r = await (f ? reportDb(tenantId) : db()).sql<Row>(
     `SELECT site, utm_source, utm_medium, utm_campaign, utm_content, anonymous_id, session_id, MIN(occurred_at) AS first_at,
             SUM(CASE WHEN event_type = 'pageview' OR event_type = 'page_view' THEN 1 ELSE 0 END) AS pageviews
        FROM pm_events WHERE ${parts.join(' AND ')}
@@ -389,7 +396,7 @@ export async function campaignReport(tenantId: string, f: CampaignFilters): Prom
   await Promise.all([ensureEventsTable(), ensureCampaignsTable()]);
   const [touches, conv, saved, ctx] = await Promise.all([
     utmTouches(tenantId, f),
-    db().sql<Row>(
+    reportDb(tenantId).sql<Row>(
       `SELECT anonymous_id, event_type, MIN(occurred_at) AS first_at FROM pm_events
         WHERE tenant_id = $1 AND event_type IN (${CONVERSION_TYPES.map(lit).join(',')}) GROUP BY anonymous_id, event_type LIMIT 100000`,
       [tenantId],
@@ -429,7 +436,7 @@ export function ensureCampaignsTable(): Promise<void> {
 
 export async function listCampaigns(tenantId: string): Promise<SavedCampaign[]> {
   await ensureCampaignsTable();
-  const r = await db().sql<Row>(`SELECT * FROM pm_campaigns WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1000`, [tenantId]);
+  const r = await reportDb(tenantId).sql<Row>(`SELECT * FROM pm_campaigns WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1000`, [tenantId]);
   return r.rows.map((x) => ({
     campaign_id: String(x.campaign_id), name: String(x.name ?? x.utm_campaign ?? ''), channel: asStr(x.channel), site: asStr(x.site),
     site_url: asStr(x.site_url), utm_source: String(x.utm_source ?? ''), utm_medium: String(x.utm_medium ?? ''), utm_campaign: String(x.utm_campaign ?? ''),
@@ -444,20 +451,22 @@ export async function insertCampaign(c: Omit<SavedCampaign, 'campaign_id' | 'cre
   await db().sql(
     `INSERT INTO pm_campaigns (campaign_id, tenant_id, name, channel, site, site_url, utm_source, utm_medium, utm_campaign, utm_content, utm_term, tagged_url, notes, created_by, created_at)
      VALUES (${[row.campaign_id, c.tenantId, c.name, c.channel, c.site, c.site_url, c.utm_source, c.utm_medium, c.utm_campaign, c.utm_content, c.utm_term, c.tagged_url, c.notes, c.createdBy, row.created_at].map(lit).join(',')})`,
-  );
+  ).finally(() => invalidateReports(c.tenantId));
   const { tenantId: _t, createdBy: _c, ...saved } = row;
   return saved;
 }
 
 export async function deleteCampaign(tenantId: string, campaignId: string): Promise<void> {
   await ensureCampaignsTable();
-  await db().sql(`DELETE FROM pm_campaigns WHERE tenant_id = $1 AND campaign_id = $2`, [tenantId, campaignId]);
+  await db()
+    .sql(`DELETE FROM pm_campaigns WHERE tenant_id = $1 AND campaign_id = $2`, [tenantId, campaignId])
+    .finally(() => invalidateReports(tenantId));
 }
 
 export async function visitorEvents(tenantId: string, anonymousId: string, limit = 2000): Promise<Row[]> {
   await ensureEventsTable();
   const lim = Math.max(1, Math.min(5000, Math.floor(limit)));
-  const res = await db().sql<Row>(
+  const res = await reportDb(tenantId).sql<Row>(
     `SELECT * FROM pm_events WHERE tenant_id = $1 AND anonymous_id = $2 ORDER BY occurred_at ASC LIMIT ${lim}`,
     [tenantId, anonymousId],
   );
@@ -474,16 +483,17 @@ export interface FilterOptions {
 
 export async function filterOptions(tenantId: string): Promise<FilterOptions> {
   await ensureEventsTable();
-  const sites = await db().sql<Row>(
+  const rdb = reportDb(tenantId);
+  const sites = await rdb.sql<Row>(
     `SELECT site, COUNT(*) AS n FROM pm_events WHERE tenant_id = $1 AND site IS NOT NULL GROUP BY site ORDER BY n DESC LIMIT 50`,
     [tenantId],
   );
-  const countries = await db().sql<Row>(
+  const countries = await rdb.sql<Row>(
     `SELECT country, country_name, COUNT(*) AS n FROM pm_events WHERE tenant_id = $1 AND country IS NOT NULL
       GROUP BY country, country_name ORDER BY n DESC LIMIT 100`,
     [tenantId],
   );
-  const utm = await db().sql<Row>(
+  const utm = await rdb.sql<Row>(
     `SELECT utm_source, utm_medium, utm_campaign, COUNT(*) AS n FROM pm_events
       WHERE tenant_id = $1 AND (utm_source IS NOT NULL OR utm_campaign IS NOT NULL)
       GROUP BY utm_source, utm_medium, utm_campaign ORDER BY n DESC LIMIT 500`,
@@ -512,13 +522,14 @@ export interface VisitorBreakdown {
 export async function visitorBreakdown(tenantId: string, days = 30): Promise<VisitorBreakdown> {
   await ensureEventsTable();
   const since = sqlTs(new Date(Date.now() - days * 86400_000));
+  const rdb = reportDb(tenantId);
   const [perVisitor, bots, ctx] = await Promise.all([
-    db().sql<Row>(
+    rdb.sql<Row>(
       `SELECT anonymous_id, country, country_name, COUNT(*) AS events, MAX(CASE WHEN is_bot = TRUE THEN 1 ELSE 0 END) AS any_bot
          FROM pm_events WHERE tenant_id = $1 AND occurred_at >= $2 GROUP BY anonymous_id, country, country_name LIMIT ${MAX_VISITORS * 2}`,
       [tenantId, since],
     ),
-    db().sql<Row>(
+    rdb.sql<Row>(
       `SELECT bot_name, bot_category, bot_verified, COUNT(*) AS events
          FROM pm_events WHERE tenant_id = $1 AND occurred_at >= $2 AND is_bot = TRUE
         GROUP BY bot_name, bot_category, bot_verified ORDER BY events DESC LIMIT 10`,
@@ -566,7 +577,7 @@ export async function conversionFunnel(tenantId: string, days = 30): Promise<Fun
   await ensureEventsTable();
   const since = sqlTs(new Date(Date.now() - days * 86400_000));
   const cap = 50_000;
-  const r = await db().sql<Row>(
+  const r = await reportDb(tenantId).sql<Row>(
     `SELECT site, event_type, anonymous_id, COUNT(*) AS events
        FROM pm_events
       WHERE tenant_id = $1 AND occurred_at >= $2 AND is_bot = FALSE
@@ -613,6 +624,14 @@ const sameVerdict = (r: Row, c: Classification) =>
  */
 export async function reclassifyEvents(matcher: CrawlerMatcher, batchSize = 500): Promise<ReclassifyResult> {
   await ensureEventsTable();
+  try {
+    return await reclassifyBatches(matcher, batchSize);
+  } finally {
+    invalidateReports();
+  }
+}
+
+async function reclassifyBatches(matcher: CrawlerMatcher, batchSize: number): Promise<ReclassifyResult> {
   const before = await botSplit();
   let scanned = 0;
   let changed = 0;

@@ -35,6 +35,7 @@ export function AppPageHeader({
         {back && (
           <nav aria-label="Breadcrumb" className="mb-1">
             <Link
+              prefetch={false}
               href={back.href}
               className="-ml-1 inline-flex items-center gap-1 rounded-md px-1 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >

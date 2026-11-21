@@ -56,7 +56,7 @@ export default async function UtmCampaignsPage({ searchParams }: { searchParams:
     <div className="space-y-6">
       <AppPageHeader
         title="UTM Campaigns"
-        description={<>Visitors, sessions and conversions by utm_campaign / source / medium, per site. Campaigns seen in traffic but never created show as <b>untracked</b>. <Link href="/utm-campaigns/builder" className="underline">Create a campaign link →</Link></>}
+        description={<>Visitors, sessions and conversions by utm_campaign / source / medium, per site. Campaigns seen in traffic but never created show as <b>untracked</b>. <Link prefetch={false} href="/utm-campaigns/builder" className="underline">Create a campaign link →</Link></>}
       />
 
       <Card>
@@ -71,7 +71,7 @@ export default async function UtmCampaignsPage({ searchParams }: { searchParams:
         <CardContent className="overflow-x-auto pt-6">
           {rows.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No campaign traffic for these filters yet. Tag your links with utm_source / utm_medium / utm_campaign — the <Link href="/utm-campaigns/builder" className="underline">link builder</Link> does it for you.
+              No campaign traffic for these filters yet. Tag your links with utm_source / utm_medium / utm_campaign — the <Link prefetch={false} href="/utm-campaigns/builder" className="underline">link builder</Link> does it for you.
             </p>
           ) : (
             <table className="w-full min-w-[860px] text-sm">
@@ -105,7 +105,7 @@ export default async function UtmCampaignsPage({ searchParams }: { searchParams:
                     </td>
                     <td className="pr-3">{r.site || '—'}</td>
                     <td className="pr-3">{r.utm_source || '—'} / {r.utm_medium || '—'}</td>
-                    <td className="pr-3 text-right tabular-nums">{r.visitors > 0 ? <Link href={visitorsLink(r)} className="underline">{r.visitors}</Link> : 0}</td>
+                    <td className="pr-3 text-right tabular-nums">{r.visitors > 0 ? <Link prefetch={false} href={visitorsLink(r)} className="underline">{r.visitors}</Link> : 0}</td>
                     <td className="pr-3 text-right tabular-nums">{r.sessions}</td>
                     <td className="pr-3 text-right tabular-nums">{r.pageviews}</td>
                     <td className="pr-3 text-right tabular-nums">{r.leads}</td>

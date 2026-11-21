@@ -22,6 +22,7 @@
 import 'server-only';
 import { randomBytes } from 'node:crypto';
 import { getAdminClient } from '@synapcores/app-framework/db/server';
+import { invalidateReports } from './report-db';
 
 const PIXEL_PREFIX = 'pk_';
 
@@ -61,11 +62,13 @@ export async function createPixel(opts: {
   const id = `${PIXEL_PREFIX}${randomBytes(18).toString('base64url')}`;
   const origins = normalizeOrigins(opts.allowedOrigins);
   const db = getAdminClient();
-  await db.sql(
-    `INSERT INTO tracking_pixels (id, tenant_id, user_id, label, allowed_origins, created_at)
-     VALUES ($1, $2, $3, $4, $5, NOW())`,
-    [id, opts.tenantId, opts.userId, opts.label, origins],
-  );
+  await db
+    .sql(
+      `INSERT INTO tracking_pixels (id, tenant_id, user_id, label, allowed_origins, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())`,
+      [id, opts.tenantId, opts.userId, opts.label, origins],
+    )
+    .finally(() => invalidateReports(opts.tenantId));
   return {
     id,
     label: opts.label,
@@ -125,16 +128,17 @@ export async function resolvePixel(pixelId: unknown): Promise<ResolvedPixel | nu
 /** Turn a pixel off without deleting it (keeps its history). Tenant-scoped. */
 export async function disablePixel(tenantId: string, id: string): Promise<void> {
   const db = getAdminClient();
-  await db.sql(
-    `UPDATE tracking_pixels SET disabled_at = NOW() WHERE id = $1 AND tenant_id = $2`,
-    [id, tenantId],
-  );
+  await db
+    .sql(`UPDATE tracking_pixels SET disabled_at = NOW() WHERE id = $1 AND tenant_id = $2`, [id, tenantId])
+    .finally(() => invalidateReports(tenantId));
 }
 
 /** Permanently remove a pixel. Tenant-scoped so one workspace can't touch another's. */
 export async function deletePixel(tenantId: string, id: string): Promise<void> {
   const db = getAdminClient();
-  await db.sql(`DELETE FROM tracking_pixels WHERE id = $1 AND tenant_id = $2`, [id, tenantId]);
+  await db
+    .sql(`DELETE FROM tracking_pixels WHERE id = $1 AND tenant_id = $2`, [id, tenantId])
+    .finally(() => invalidateReports(tenantId));
 }
 
 /**

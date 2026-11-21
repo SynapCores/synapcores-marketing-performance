@@ -37,6 +37,7 @@ export function Sidebar({
     <aside className="hidden md:flex md:flex-col w-60 shrink-0 border-r border-border bg-card">
       <div className="h-14 flex items-center px-5 border-b border-border">
         <Link
+          prefetch={false}
           href={brand.href}
           className="font-headline text-lg font-bold tracking-tight text-foreground"
         >
@@ -85,6 +86,7 @@ export function SidebarNav({
               return (
                 <li key={it.href}>
                   <Link
+                    prefetch={false}
                     href={it.href}
                     aria-current={active ? 'page' : undefined}
                     onClick={onNavigate}
