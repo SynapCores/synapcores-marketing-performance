@@ -49,7 +49,10 @@ const UA = {
   metaAgent: 'meta-externalagent/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler)',
   metaFetcher: 'meta-externalfetcher/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler)',
   chatgptUser: 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; ChatGPT-User/1.0; +https://openai.com/bot',
-  chatgptAgent: `${CHROME} ChatGPT-Agent/1.0`, // a UA carrying the token ua.ts matches
+  chatgptAgent: `${CHROME} ChatGPT-Agent/1.0`, // the token ua.ts matches; OpenAI documents none for its agent
+  claudeAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-Agent/1.0) Chrome/154.0.0.0 Safari/537.36', // Anthropic's documented example
+  amznUser: 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Amzn-User/0.1) Chrome/131.0.0.0 Safari/537.36',
+  geminiNotebook: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36 (compatible; Google-GeminiNotebook; +https://developers.google.com/crawling/docs/crawlers-fetchers/google-gemininotebook)',
   claudeUser: 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-User/1.0; +Claude-User@anthropic.com)',
   diffbotUser: 'Mozilla/5.0 (compatible; Diffbot-User/1.0; +https://www.diffbot.com)',
   fbHit: 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
@@ -72,6 +75,7 @@ const IP = {
   anthropic: '216.73.216.10', // 216.73.216.0/22 in claude.com/crawling/bots.json
   perplexityUser: inList('perplexity-user'),
   googleUserTriggered: inList('google-user-triggered'),
+  claudeAgent: '34.31.25.14', // claude.com/.well-known/sail (Claude-Agent), in no bundled list
 };
 
 type Case = [label: string, ua: string, ip: string | null, category: string, name?: string];
@@ -102,14 +106,30 @@ test('pixel: user-initiated AI agents and fetchers are ingested', () => {
   const cases: Case[] = [
     ['ChatGPT-User from its range', UA.chatgptUser, IP.chatgptUser, 'ai', 'ChatGPT-User (OpenAI)'],
     ['plain Chrome UA from the broad 9.129.0.0/16 ChatGPT-User range', UA.chromeMac, IP.chatgptUserBroad, 'ai', 'ChatGPT-User (OpenAI)'],
-    ['ChatGPT Agent (browses and buys for a user)', UA.chatgptAgent, IP.chatgptUser, 'ai', 'ChatGPT Agent (OpenAI)'],
+    ['ChatGPT Agent (browses for a user)', UA.chatgptAgent, IP.chatgptUser, 'ai', 'ChatGPT Agent (OpenAI)'],
     ['Claude-User from its range', UA.claudeUser, IP.anthropic, 'ai', 'Claude-User (Anthropic)'],
     ['Perplexity-User via range with a plain UA', UA.chromeMac, IP.perplexityUser, 'ai', 'Perplexity-User'],
     ['Meta-ExternalFetcher', UA.metaFetcher, IP.hosting, 'ai', 'Meta-ExternalFetcher'],
     ['Diffbot-User (the /Diffbot/ rule names it Diffbot)', UA.diffbotUser, IP.hosting, 'ai', 'Diffbot'],
-    ["plain UA from Anthropic's one list for all its bots (Claude-User included)", UA.chromeMac, IP.anthropic, 'ai', 'Claude crawler (Anthropic)'],
+    ["plain UA from Anthropic's single list for all its bots (may be Claude-User)", UA.chromeMac, IP.anthropic, 'ai', 'Claude crawler (Anthropic)'],
   ];
   for (const c of cases) assert.equal(pixelGate(c), true, c[0]);
+});
+
+// Documented user-initiated agents that ua.ts has no rule for yet. They classify
+// as human or `other` today; a new rule that files one as a crawler fails here.
+test('pixel: user-initiated agents with no UA rule yet are ingested', () => {
+  const cases: Array<[label: string, ua: string, ip: string]> = [
+    ['Claude-Agent from its own IP list', UA.claudeAgent, IP.claudeAgent],
+    ['Amzn-User', UA.amznUser, IP.hosting],
+    ['Gemini Notebook from the user-triggered range', UA.geminiNotebook, IP.googleUserTriggered],
+    ['Gemini Notebook from an unlisted IP', UA.geminiNotebook, IP.hosting],
+    ['ChatGPT Work cloud browser: a plain browser UA (it signs requests, no UA token)', UA.chromeMac, IP.hosting],
+  ];
+  for (const [label, ua, ip] of cases) {
+    const v = classifyVisitor(ua, ip, M);
+    assert.equal(shouldIngestForAttribution('pixel', v), true, `${label} (${v.botCategory} / ${v.botName})`);
+  }
 });
 
 test('pixel: social, monitor, headless, scripted and other bots are ingested (a wrong verdict there could cost attribution)', () => {
@@ -178,7 +198,7 @@ const AI_RULES: Array<[token: string, name: string, userInitiated: boolean]> = [
   ['Google-CloudVertexBot', 'Google-CloudVertexBot', false],
   ['Google-Agent', 'Google AI Agent', true],
   ['Gemini-Deep-Research', 'Google AI Agent', true],
-  ['Google-NotebookLM', 'Google AI Agent', true],
+  ['Google-NotebookLM', 'Google AI Agent', true], // former token, supported until August 2026
   ['Applebot-Extended', 'Applebot-Extended', false],
   ['CCBot', 'CCBot (Common Crawl)', false],
   ['Bytespider', 'Bytespider (ByteDance)', false],

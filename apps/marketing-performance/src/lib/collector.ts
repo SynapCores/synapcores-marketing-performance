@@ -217,8 +217,11 @@ export type CollectSourceKind = 'pixel' | 'key' | 'dev';
  *
  *   -User                 ChatGPT-User, Claude-User, Perplexity-User, MistralAI-User
  *                         (also the 'ChatGPT-User (OpenAI)' / 'Perplexity-User' range labels)
- *   ChatGPT Agent         OpenAI's agent, browsing (and buying) for a user
- *   Google AI Agent       Google-Agent, Gemini Deep Research, NotebookLM
+ *   ChatGPT Agent         OpenAI's agent browsing for a user. OpenAI documents no
+ *                         UA token for it (it signs its requests instead), so its
+ *                         plain browser UA usually classifies as human: ingested
+ *   Google AI Agent       Google-Agent, Gemini Deep Research, and NotebookLM's
+ *                         former token (Google-GeminiNotebook has no rule yet)
  *   Meta-ExternalFetcher  Meta AI fetching a link a person shared
  *   DuckAssistBot         fetches in real time for a DuckDuckGo query
  *   Phind                 answer engine fetching pages for each question
@@ -226,8 +229,12 @@ export type CollectSourceKind = 'pixel' | 'key' | 'dev';
  * A name that covers a user-initiated agent and a crawler at once counts too:
  *   Cohere                cohere-ai (user prompts) + cohere-training-data-crawler
  *   Diffbot               the /Diffbot/ rule also matches Diffbot-User
- *   Claude crawler        range label of Anthropic's one IP list for all its
- *                         bots, Claude-User included
+ *   Claude crawler        range label of Anthropic's single IP list, published
+ *                         for all its bots with no per-bot split, so it may be
+ *                         Claude-User
+ *
+ * Agents with no UA rule yet (Claude-Agent, Amzn-User, Google-GeminiNotebook)
+ * classify as human or `other` and are ingested without an entry here.
  */
 export const USER_INITIATED_AI_BOT =
   /-User\b|^(?:ChatGPT Agent|Google AI Agent|Meta-ExternalFetcher|DuckAssistBot|Phind|Cohere|Diffbot|Claude crawler)\b/;
