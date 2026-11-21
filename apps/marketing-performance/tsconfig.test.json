@@ -23,6 +23,7 @@
     "src/lib/timezone.ts",
     "src/lib/query-cache.ts",
     "src/lib/recipe-sql.ts",
+    "src/lib/derived-rebuild.ts",
     "src/app/hydration-gate.ts"
   ]
 }
