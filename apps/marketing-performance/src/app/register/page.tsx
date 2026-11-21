@@ -12,6 +12,7 @@ import {
 } from '@synapcores/app-framework';
 import { Scale } from 'lucide-react';
 import { signIn } from '@/lib/auth';
+import { authErrorMessage } from '@/lib/auth-errors';
 import { getSession } from '@/lib/session';
 import { register } from '@/app/register/actions';
 
@@ -37,7 +38,13 @@ export default async function RegisterPage({
       const msg = err instanceof Error ? err.message : 'Something went wrong.';
       redirect(`/register?error=${encodeURIComponent(msg)}`);
     }
-    await signIn('credentials', { email, password, redirectTo: '/' });
+    try {
+      await signIn('credentials', { email, password, redirectTo: '/' });
+    } catch (err) {
+      const msg = authErrorMessage(err);
+      if (!msg) throw err;
+      redirect(`/login?error=${encodeURIComponent(msg)}`);
+    }
   }
 
   return (

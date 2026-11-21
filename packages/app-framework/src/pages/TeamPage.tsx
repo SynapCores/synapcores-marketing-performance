@@ -50,6 +50,11 @@ export function makeTeamPage({ appName }: TeamPageProps) {
     const email = String(formData.get('email') ?? '').trim();
     const role = String(formData.get('role') ?? 'analyst') as Role;
     if (!session!.tenant) return;
+    // Only known roles; only an owner may hand out owner.
+    const ROLES: ReadonlyArray<Role> = ['owner', 'admin', 'analyst', 'viewer', 'auditor'];
+    if (!ROLES.includes(role) || (role === 'owner' && session!.role !== 'owner')) {
+      redirect('/team?err=forbidden');
+    }
     const base = process.env.NEXTAUTH_URL ?? 'http://localhost:3001';
     try {
       await inviteUser({
@@ -78,7 +83,8 @@ export function makeTeamPage({ appName }: TeamPageProps) {
       redirect('/team?err=forbidden');
     }
     const id = String(formData.get('id') ?? '');
-    await revokeInvitation(id);
+    if (!session!.tenant) return;
+    await revokeInvitation(id, session!.tenant.id);
     redirect('/team?ok=revoked');
   }
 

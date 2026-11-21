@@ -8,8 +8,8 @@ const usd2 = (n: unknown) => n == null ? '—' : '$' + Number(n).toLocaleString(
 const pdot = (p: unknown) => ({ facebook: '#4267B2', tiktok: '#ff0050', google: '#ea4335' } as Record<string, string>)[String(p)] ?? '#888';
 
 export default async function AttributionPage() {
-  await requireSession();
-  const rows = await attribution();
+  const session = await requireSession();
+  const rows = await attribution(session.tenant?.id);
 
   return (
     <div className="space-y-6">

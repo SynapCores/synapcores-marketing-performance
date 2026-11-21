@@ -60,16 +60,29 @@ export function createAuth(
           email: { label: 'Email', type: 'email' },
           password: { label: 'Password', type: 'password' },
         },
-        async authorize(raw) {
+        async authorize(raw, request) {
           const parsed = credentialsSchema.safeParse(raw);
           if (!parsed.success) return null;
+          // Brute-force guard: cap failed attempts per account and per client IP.
+          const email = parsed.data.email.trim().toLowerCase();
+          const ip = clientIpOf(request);
+          if (loginBlocked(`e:${email}`) || loginBlocked(`i:${ip}`)) {
+            console.warn(`[auth] login throttled email=${email} ip=${ip}`);
+            return null;
+          }
           let user;
           try {
             user = await verifyPassword(parsed.data.email, parsed.data.password);
           } catch {
             return null;
           }
-          return user ? { id: user.id, email: user.email, name: user.name } : null;
+          if (!user) {
+            loginFailed(`e:${email}`);
+            loginFailed(`i:${ip}`);
+            console.warn(`[auth] login failed email=${email} ip=${ip}`);
+            return null;
+          }
+          return { id: user.id, email: user.email, name: user.name };
         },
       }),
       // Magic-link provider — caller invokes `signIn('magic-link', { token })`
@@ -81,10 +94,13 @@ export function createAuth(
         credentials: {
           token: { label: 'Token', type: 'text' },
         },
-        async authorize(raw) {
+        async authorize(raw, request) {
+          const ip = clientIpOf(request);
+          if (loginBlocked(`i:${ip}`)) return null;
           const token = typeof raw?.token === 'string' ? raw.token : '';
           if (!token) return null;
           try {
+            loginFailed(`i:${ip}`); // counts every redemption attempt; success is rare and cheap
             const userId = await redeemAuthToken(token, 'magic-link');
             const user = await loadUser(userId);
             return user ? { id: user.id, email: user.email, name: user.name } : null;
@@ -314,4 +330,35 @@ async function readTenantApiKey(tenantId: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+// ─── login throttling (per process) ──────────────────────────────────────
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILS = 8;
+const loginFails = new Map<string, { n: number; until: number }>();
+
+function loginBlocked(key: string): boolean {
+  const e = loginFails.get(key);
+  if (!e) return false;
+  if (Date.now() > e.until) {
+    loginFails.delete(key);
+    return false;
+  }
+  return e.n >= LOGIN_MAX_FAILS;
+}
+
+function loginFailed(key: string): void {
+  const now = Date.now();
+  if (loginFails.size > 50_000) loginFails.clear();
+  const e = loginFails.get(key);
+  if (!e || now > e.until) loginFails.set(key, { n: 1, until: now + LOGIN_WINDOW_MS });
+  else e.n += 1;
+}
+
+/** Real client IP: our single reverse proxy appends it as the LAST X-Forwarded-For entry. */
+function clientIpOf(request: unknown): string {
+  const h = (request as { headers?: Headers } | undefined)?.headers;
+  const xff = h?.get?.('x-forwarded-for');
+  if (xff) return xff.split(',').pop()!.trim();
+  return h?.get?.('x-real-ip') ?? 'unknown';
 }

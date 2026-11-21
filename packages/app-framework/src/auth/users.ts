@@ -188,10 +188,15 @@ export async function redeemAuthToken(
   if (new Date(row.expires_at) < new Date()) {
     throw new ValidationError('This token has expired.');
   }
-  await db.sql(
-    `UPDATE auth_tokens SET used_at = NOW() WHERE token = $1`,
-    [token],
+  // Conditional claim: only one of two concurrent redemptions can flip used_at.
+  const upd = await db.sql(
+    `UPDATE auth_tokens SET used_at = NOW() WHERE token = $1 AND purpose = $2 AND used_at IS NULL`,
+    [token, purpose],
   );
+  // The engine answers an UPDATE with a single [[count]] row.
+  const first = upd.rows[0] ? Object.values(upd.rows[0] as Record<string, unknown>)[0] : undefined;
+  const claimed = Number(typeof first === 'number' ? first : upd.rowCount);
+  if (claimed === 0) throw new ValidationError('This token has already been used.');
   return row.user_id;
 }
 

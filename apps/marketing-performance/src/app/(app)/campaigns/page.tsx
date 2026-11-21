@@ -10,8 +10,8 @@ const num = (n: unknown, d = 2) => n == null ? '—' : Number(n).toFixed(d);
 const pdot = (p: unknown) => ({ facebook: '#4267B2', tiktok: '#ff0050', google: '#ea4335' } as Record<string, string>)[String(p)] ?? '#888';
 
 export default async function CampaignsPage() {
-  await requireSession();
-  const sc = (await scorecard()).sort((a, b) => Number(b.spend) - Number(a.spend));
+  const session = await requireSession();
+  const sc = (await scorecard(session.tenant?.id)).sort((a, b) => Number(b.spend) - Number(a.spend));
 
   return (
     <div className="space-y-6">

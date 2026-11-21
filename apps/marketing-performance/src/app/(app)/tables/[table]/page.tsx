@@ -1,19 +1,22 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { AppPageHeader, Card, CardContent, DataTable, type DataTableColumn } from '@synapcores/app-framework';
 import { requireSession } from '@/lib/session';
 import { tableRows, TABLE_META, type Row } from '@/lib/warehouse';
 import { TABLES } from '@/lib/recipe-sql';
+import { LocalTime } from '@/components/LocalTime';
+// A plain module: functions imported through the 'use client' LocalTime module
+// are client references on the server and throw when called here.
+import { looksLikeTimestamp } from '@/lib/timezone';
 
 export const dynamic = 'force-dynamic';
 
 export default async function TableBrowsePage({ params }: { params: Promise<{ table: string }> }) {
-  await requireSession();
+  const session = await requireSession();
   const { table } = await params;
   if (!TABLES.includes(table)) notFound();
 
   const meta = TABLE_META[table];
-  const { columns, rows } = await tableRows(table, 500);
+  const { columns, rows } = await tableRows(session.tenant?.id, table, 500);
 
   // The `angle` embedding column is 384 floats — summarize instead of dumping it.
   const displayCols = columns.filter((c) => c !== 'angle');
@@ -29,7 +32,8 @@ export default async function TableBrowsePage({ params }: { params: Promise<{ ta
     <div className="space-y-6">
       <AppPageHeader
         title={meta?.label ?? table}
-        description={<>{meta?.desc} · <span className="text-muted-foreground">{rows.length.toLocaleString()} rows shown</span> · <Link href="/tables" className="underline">all tables</Link></>}
+        back={{ href: '/tables', label: 'Data Tables' }}
+        description={<>{meta?.desc} · <span className="text-muted-foreground">{rows.length.toLocaleString()} rows shown</span></>}
       />
       <Card>
         <CardContent className="overflow-x-auto pt-6">
@@ -40,8 +44,9 @@ export default async function TableBrowsePage({ params }: { params: Promise<{ ta
   );
 }
 
-function formatCell(v: unknown): string {
+function formatCell(v: unknown): React.ReactNode {
   if (v == null) return '—';
+  if (looksLikeTimestamp(v)) return <LocalTime value={v} />;
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2);
   return String(v);
 }

@@ -68,7 +68,8 @@ async function revoke(formData: FormData): Promise<void> {
   } catch {
     redirect('/settings/mcp-tokens?err=forbidden');
   }
-  await revokeMcpToken(String(formData.get('id') ?? ''));
+  if (!session?.tenant) redirect('/login');
+  await revokeMcpToken(String(formData.get('id') ?? ''), session!.tenant!.id);
   redirect('/settings/mcp-tokens?ok=revoked');
 }
 

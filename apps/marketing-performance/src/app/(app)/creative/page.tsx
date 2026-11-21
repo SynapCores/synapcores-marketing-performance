@@ -8,8 +8,8 @@ const usd = (n: unknown) => n == null ? '—' : '$' + Number(n).toLocaleString(u
 const num = (n: unknown, d = 2) => n == null ? '—' : Number(n).toFixed(d);
 
 export default async function CreativePage() {
-  await requireSession();
-  const rows = await creativeAngle(); // sorted by discount_affinity DESC
+  const session = await requireSession();
+  const rows = await creativeAngle(session.tenant?.id); // sorted by discount_affinity DESC
 
   return (
     <div className="space-y-6">

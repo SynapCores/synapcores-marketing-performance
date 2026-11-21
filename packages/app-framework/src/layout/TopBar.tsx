@@ -23,6 +23,7 @@ export function TopBar({
   userEmail,
   signOutAction,
   right,
+  left,
 }: {
   tenantName: string | null;
   userName: string;
@@ -30,10 +31,13 @@ export function TopBar({
   /** Server action that signs the user out. */
   signOutAction: () => Promise<void>;
   right?: React.ReactNode;
+  /** Leading slot (DashboardLayout puts the mobile hamburger menu here). */
+  left?: React.ReactNode;
 }) {
   return (
     <header className="h-14 border-b border-border bg-card flex items-center justify-between px-4 md:px-6">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 min-w-0">
+        {left}
         {tenantName && (
           <div className="hidden sm:flex items-center gap-2 text-sm">
             <span className="text-muted-foreground">Workspace:</span>
@@ -61,12 +65,12 @@ export function TopBar({
             </div>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
-              <Link href="/settings/profile" className="w-full">
+              <Link prefetch={false} href="/settings/profile" className="w-full">
                 Profile
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
-              <Link href="/settings" className="w-full">
+              <Link prefetch={false} href="/settings" className="w-full">
                 Settings
               </Link>
             </DropdownMenuItem>

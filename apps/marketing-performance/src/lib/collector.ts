@@ -28,8 +28,20 @@ export interface BeaconBatch {
   timestamp?: number;
   url?: string;
   referrer?: string;
+  title?: string;
   userAgent?: string;
-  viewport?: { width?: number; height?: number };
+  /** navigator.language, e.g. 'en-US'. */
+  language?: string | null;
+  /** IANA zone from Intl, e.g. 'America/New_York'. */
+  timezone?: string | null;
+  viewport?: { width?: number | null; height?: number | null };
+  screen?: { width?: number | null; height?: number | null };
+  /**
+   * End-user IP — honoured ONLY on the authenticated server-to-server path
+   * (sk_ key), where the request's own IP is the customer's server. Ignored
+   * for browser beacons, whose IP comes from the proxy-appended XFF hop.
+   */
+  ip?: string | null;
   events?: BeaconEvent[];
 }
 
@@ -42,10 +54,28 @@ export interface MappedBatch {
 }
 
 // Event-name sets (lowercased). A landing/navigation touch becomes a click
-// event; a purchase becomes a conversion; an identify resolves anon → customer.
-const TOUCH_EVENTS = new Set(['page_view', 'pageview', 'page', 'navigation', 'session_start', 'landing']);
-const PURCHASE_EVENTS = new Set(['purchase', 'order_completed', 'order', 'conversion', 'checkout_completed']);
-const IDENTIFY_EVENTS = new Set(['identify', 'identified', 'login', 'sign_up', 'signup']);
+// event; a purchase, lead or sign-up becomes a conversion; an identify (or a
+// sign-up that carries a customer id) resolves anon → customer.
+export const TOUCH_EVENTS = new Set(['page_view', 'pageview', 'page', 'navigation', 'session_start', 'landing']);
+export const PURCHASE_EVENTS = new Set(['purchase', 'order_completed', 'order', 'conversion', 'checkout_completed']);
+export const LEAD_EVENTS = new Set(['lead', 'generate_lead']);
+export const SIGNUP_EVENTS = new Set(['signup', 'sign_up', 'complete_registration', 'registration_complete']);
+const IDENTIFY_EVENTS = new Set(['identify', 'identified', 'login', ...SIGNUP_EVENTS]);
+// Funnel steps between a visit and a conversion. Not conversions and not
+// attribution touches: they live in `pm_events` (with their properties) and
+// feed the funnel report (see visitor/funnel.ts).
+export const VIEW_PRICING_EVENTS = new Set(['view_pricing', 'pricing_view']);
+export const BEGIN_CHECKOUT_EVENTS = new Set(['begin_checkout', 'initiate_checkout', 'checkout_started', 'checkout']);
+
+/**
+ * `recipe_pm_conversions.event_name` values. Only `first_purchase` is a paying
+ * customer: attribution / CAC / ROAS count it alone (see ATTRIBUTION in
+ * recipe-sql.ts); `lead` and `signup` are reported as conversions alongside it.
+ */
+export const CONVERSION_PURCHASE = 'first_purchase';
+export const CONVERSION_LEAD = 'lead';
+export const CONVERSION_SIGNUP = 'signup';
+export const NON_PURCHASE_CONVERSIONS = [CONVERSION_LEAD, CONVERSION_SIGNUP] as const;
 
 /** Coarse device class from a User-Agent — enough for the clickstream `device` column. */
 export function uaToDevice(ua: string | undefined): string {
@@ -144,11 +174,17 @@ export function mapBatch(batch: BeaconBatch): MappedBatch {
       });
     }
 
-    if (PURCHASE_EVENTS.has(name)) {
+    const conversion = PURCHASE_EVENTS.has(name) ? CONVERSION_PURCHASE
+      : LEAD_EVENTS.has(name) ? CONVERSION_LEAD
+      : SIGNUP_EVENTS.has(name) ? CONVERSION_SIGNUP
+      : null;
+    if (conversion) {
+      // Same shape (and the same no-dedupe semantics) for all three: one row per
+      // event. Leads / sign-ups only carry revenue if the site sent a value.
       out.conversions.push({
         anonymous_id: anonymousId,
         occurred_at: occurredAt,
-        event_name: 'first_purchase',
+        event_name: conversion,
         revenue: num(data.revenue ?? data.value ?? data.total ?? data.amount),
         site,
       });

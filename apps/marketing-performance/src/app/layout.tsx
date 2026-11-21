@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { HYDRATION_GATE_SCRIPT } from './hydration-gate';
 
 export const metadata: Metadata = {
   title: 'Performance Marketing',
@@ -15,6 +16,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark">
+      <head>
+        {/* Must run before Next's webpack runtime: see hydration-gate.ts (fixes random React #418). */}
+        <script dangerouslySetInnerHTML={{ __html: HYDRATION_GATE_SCRIPT }} />
+      </head>
       <body>{children}</body>
     </html>
   );

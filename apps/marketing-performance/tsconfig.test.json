@@ -1,0 +1,29 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".test-build",
+    "rootDir": ".",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2022",
+    "jsx": "preserve",
+    "incremental": false,
+    "declaration": false,
+    "sourceMap": false,
+    "skipLibCheck": true,
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "tests/**/*.ts",
+    "src/lib/visitor/**/*.ts",
+    "src/lib/collector.ts",
+    "src/lib/timezone.ts",
+    "src/lib/query-cache.ts",
+    "src/lib/recipe-sql.ts",
+    "src/lib/derived-rebuild.ts",
+    "src/app/hydration-gate.ts"
+  ]
+}
