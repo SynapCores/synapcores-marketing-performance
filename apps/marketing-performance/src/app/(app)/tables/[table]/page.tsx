@@ -3,7 +3,10 @@ import { AppPageHeader, Card, CardContent, DataTable, type DataTableColumn } fro
 import { requireSession } from '@/lib/session';
 import { tableRows, TABLE_META, type Row } from '@/lib/warehouse';
 import { TABLES } from '@/lib/recipe-sql';
-import { LocalTime, looksLikeTimestamp } from '@/components/LocalTime';
+import { LocalTime } from '@/components/LocalTime';
+// A plain module: functions imported through the 'use client' LocalTime module
+// are client references on the server and throw when called here.
+import { looksLikeTimestamp } from '@/lib/timezone';
 
 export const dynamic = 'force-dynamic';
 
