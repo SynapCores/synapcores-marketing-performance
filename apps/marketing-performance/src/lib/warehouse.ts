@@ -31,12 +31,43 @@ export const TABLE_META: Record<string, { label: string; group: string; desc: st
 };
 
 // ── lifecycle ───────────────────────────────────────────────────────────────
-export async function ensureSchema() { for (const ddl of SCHEMA) await run(ddl); }
+// The recipe tables are created once per process. The collector calls
+// ingestSource() on every beacon, and running the 8 CREATE TABLE IF NOT EXISTS
+// each time (twice per call) was 16 of a pageview beacon's 21 engine
+// statements. Dropping tables or a failed insert makes the next caller run the
+// DDL again. The state lives on globalThis so a clearAll() from a server action
+// also resets it for the collector route (separate module instances).
+const SCHEMA_STATE = Symbol.for('synapcores.marketing-performance.warehouse-schema');
+function schemaState(): { ready: Promise<void> | null } {
+  const g = globalThis as unknown as Record<symbol, { ready: Promise<void> | null } | undefined>;
+  let s = g[SCHEMA_STATE];
+  if (!s) {
+    s = { ready: null };
+    g[SCHEMA_STATE] = s;
+  }
+  return s;
+}
+
+export function ensureSchema(): Promise<void> {
+  const s = schemaState();
+  if (!s.ready) {
+    const p = (async () => { for (const ddl of SCHEMA) await run(ddl); })();
+    s.ready = p;
+    p.catch(() => { if (s.ready === p) s.ready = null; });
+  }
+  return s.ready;
+}
+
+/** Tables were (or may have been) dropped: the next ensureSchema() recreates them. */
+function schemaChanged(): void {
+  schemaState().ready = null;
+}
 
 export async function clearAll() {
   try {
     for (const t of TABLES) { try { await run(`DROP TABLE IF EXISTS ${t}`); } catch { /* ignore */ } }
   } finally {
+    schemaChanged();
     invalidateReports();
   }
 }
@@ -44,8 +75,12 @@ export async function clearAll() {
 /** Recompute attribution + scorecard from the base tables (Steps 7 & 10). */
 export async function rebuildDerived() {
   try {
-    await run(`DROP TABLE IF EXISTS recipe_pm_attribution`);
-    await run(`DROP TABLE IF EXISTS recipe_pm_campaign_scorecard`);
+    try {
+      await run(`DROP TABLE IF EXISTS recipe_pm_attribution`);
+      await run(`DROP TABLE IF EXISTS recipe_pm_campaign_scorecard`);
+    } finally {
+      schemaChanged();
+    }
     await ensureSchema();
     await run(ATTRIBUTION);
     await run(SCORECARD);
@@ -90,6 +125,9 @@ export async function ingestRows(table: string, columns: string[], rows: unknown
       await run(`UPDATE recipe_pm_creative SET angle = EMBED(headline || ' ' || body_copy) WHERE angle IS NULL`);
     }
     return n;
+  } catch (e) {
+    schemaChanged(); // e.g. a table dropped outside the app: recreate it on the next call
+    throw e;
   } finally {
     if (opts.invalidate !== false) invalidateReports();
   }
