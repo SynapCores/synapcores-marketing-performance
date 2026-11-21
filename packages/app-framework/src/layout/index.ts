@@ -1,5 +1,6 @@
 export { DashboardLayout } from './DashboardLayout';
-export { Sidebar, SidebarNav, FRAMEWORK_SIDEBAR_SECTION } from './Sidebar';
+export { Sidebar, SidebarNav } from './Sidebar';
+export { FRAMEWORK_SIDEBAR_SECTION } from './sidebar-section';
 export { MobileNav } from './MobileNav';
 export type { SidebarItem, SidebarSection } from './Sidebar';
 export { SidebarIcons } from './icons';

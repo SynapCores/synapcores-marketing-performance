@@ -3,7 +3,6 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { FileLock2, Settings, Users } from 'lucide-react';
 import { cn } from '../ui/cn';
 
 export interface SidebarItem {
@@ -115,30 +114,8 @@ export function SidebarNav({
   );
 }
 
-/**
- * The framework's "general" sidebar items every app shows at the bottom.
- * Apps spread these in alongside their app-specific items.
- */
-export const FRAMEWORK_SIDEBAR_SECTION: SidebarSection = {
-  heading: 'Workspace',
-  items: [
-    {
-      href: '/audit',
-      label: 'Audit log',
-      icon: <FileLock2 className="h-4 w-4" />,
-    },
-    {
-      href: '/team',
-      label: 'Team',
-      icon: <Users className="h-4 w-4" />,
-    },
-    {
-      href: '/settings',
-      label: 'Settings',
-      icon: <Settings className="h-4 w-4" />,
-    },
-  ],
-};
+// FRAMEWORK_SIDEBAR_SECTION lives in ./sidebar-section (a plain module) so
+// server components get the real object instead of a client reference.
 
 // SidebarIcons re-exported from layout/icons.ts (a plain module) so
 // they work in both server and client components.
