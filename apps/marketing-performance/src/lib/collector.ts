@@ -203,3 +203,33 @@ export function mapBatch(batch: BeaconBatch): MappedBatch {
   }
   return out;
 }
+
+/** The collector's write paths: browser pixel (`pk_`), server-to-server key (`sk_`), local dev fallback. */
+export type CollectSourceKind = 'pixel' | 'key' | 'dev';
+
+/**
+ * Should a batch feed the attribution warehouse (click events, identity,
+ * conversions)? This gates only the recipe tables, because each write there
+ * re-arms the full-table attribution + scorecard rebuild; bot batches are still
+ * stored in `pm_events`.
+ *
+ *   - Server-to-server (`key`): always. A CAPI conversion is never dropped, even
+ *     when the end-user UA it forwards (or the customer server's own UA) looks
+ *     automated.
+ *   - Browser pixel (`pixel`): only when the visitor is not a bot, i.e. neither
+ *     a declared bot UA (crawlers, AI agents, headless browsers, scripted HTTP
+ *     clients) nor a browser UA from a published crawler range
+ *     (`classifyVisitor().isBot`). In practice those visitors never carry the
+ *     purchase + identify that attribution joins on, so their rows only cost
+ *     a rebuild.
+ *   - Local dev fallback (`dev`, never in production): always, so scripted
+ *     local beacons (curl, test runners) still reach attribution.
+ *   - No verdict (classification failed): ingest, as before the gate existed.
+ */
+export function shouldIngestForAttribution(
+  sourceKind: CollectSourceKind,
+  visitor: { isBot: boolean } | null | undefined,
+): boolean {
+  if (sourceKind !== 'pixel') return true;
+  return !visitor?.isBot;
+}

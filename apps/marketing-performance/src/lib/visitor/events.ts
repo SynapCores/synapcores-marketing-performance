@@ -5,14 +5,14 @@
  * pixel sends is kept with its page, referrer, campaign params, the parsed
  * User-Agent + bot verdict, the client IP (as seen through our proxy) and the
  * IP-derived approximate location. The recipe tables (click events /
- * conversions / identity) are still fed separately by `mapBatch` so
- * attribution keeps working unchanged.
+ * conversions / identity) are still fed separately by `mapBatch`, except for
+ * bot batches from the pixel (see `shouldIngestForAttribution`).
  *
  * Pure: enrichment inputs (IP, geo, parsed UA, clock, id generator) are passed
  * in, so this is unit tested without a database or GeoIP file.
  */
 import { randomUUID } from 'node:crypto';
-import type { BeaconBatch } from '../collector';
+import type { BeaconBatch, CollectSourceKind } from '../collector';
 import type { GeoInfo } from './geo';
 import { truncateIp } from './ip';
 import type { ParsedUA } from './ua';
@@ -61,7 +61,7 @@ export const PM_EVENTS_ADDED_COLUMNS: Array<[string, string]> = [
 export interface EnrichContext {
   tenantId: string;
   pixelId: string | null;
-  sourceKind: 'pixel' | 'key' | 'dev';
+  sourceKind: CollectSourceKind;
   ip: string | null;
   geo: GeoInfo;
   ua: ParsedUA & { botVerified?: BotVerification | null };

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { resolveBearerKey } from '@/lib/api-auth';
 import { isPixelId, resolvePixel, originAllowed } from '@/lib/pixels';
-import { mapBatch, type BeaconBatch } from '@/lib/collector';
+import { mapBatch, shouldIngestForAttribution, type BeaconBatch, type CollectSourceKind } from '@/lib/collector';
 import { ingestSource, rebuildDerived } from '@/lib/warehouse';
 import { clientIp, makeLimiter } from '@/lib/security';
 import { insertEvents } from '@/lib/event-store';
@@ -9,7 +9,7 @@ import { buildEventRows } from '@/lib/visitor/events';
 import { lookupGeo } from '@/lib/visitor/geo';
 import { clientIpFromHeaders, normalizeIp } from '@/lib/visitor/ip';
 import { mustDropForPrivacy } from '@/lib/visitor/privacy';
-import { classifyVisitor } from '@/lib/visitor/classify';
+import { classifyVisitor, type Classification } from '@/lib/visitor/classify';
 import { getCrawlerMatcher } from '@/lib/visitor/crawler-ranges-store';
 
 export const runtime = 'nodejs';
@@ -85,7 +85,7 @@ interface ResolvedWrite {
   tenantId: string;
   userId: string;
   keyId: string;
-  kind: 'pixel' | 'key' | 'dev';
+  kind: CollectSourceKind;
   /** Only meaningful for `kind === 'pixel'`; null = unrestricted. */
   allowedOrigins: string[] | null;
 }
@@ -170,45 +170,69 @@ export async function POST(req: Request) {
     return NextResponse.json({ data: { accepted: 0, dropped: 'privacy_signal' } }, { headers: cors });
   }
 
-  // ── raw visitor events: every event, enriched (IP, geo, UA, bot) ──────────
-  let stored = 0;
+  // ── the visitor: client IP, User-Agent and bot verdict, computed once ─────
+  // pm_events stores all three; the attribution gate below uses the verdict.
+  let ip: string | null = null;
+  let userAgent: string | null = null;
+  let visitor: Classification | null = null;
   try {
     const hops = Number(process.env.TRUSTED_PROXY_HOPS ?? 1) || 1;
-    const ip = key.kind === 'key'
+    ip = key.kind === 'key'
       ? normalizeIp(typeof batch.ip === 'string' ? batch.ip : null) ?? clientIpFromHeaders(req.headers, hops)
       : clientIpFromHeaders(req.headers, hops);
     const headerUa = req.headers.get('user-agent');
     const bodyUa = typeof batch.userAgent === 'string' ? batch.userAgent : null;
     // Browser beacons: the request header IS the browser. S2S: the body names the end user.
-    const userAgent = key.kind === 'key' ? bodyUa ?? headerUa : headerUa ?? bodyUa;
-    const rows = buildEventRows(batch, {
-      tenantId: key.tenantId,
-      pixelId: key.kind === 'pixel' ? key.keyId : null,
-      sourceKind: key.kind,
-      ip,
-      geo: lookupGeo(ip),
-      ua: classifyVisitor(userAgent, ip, getCrawlerMatcher()),
-      userAgent,
-      acceptLanguage: req.headers.get('accept-language'),
-    });
-    stored = await insertEvents(rows);
+    userAgent = key.kind === 'key' ? bodyUa ?? headerUa : headerUa ?? bodyUa;
+    visitor = classifyVisitor(userAgent, ip, getCrawlerMatcher());
   } catch (e) {
-    // Never let enrichment break attribution ingestion below.
-    console.error('[collect] pm_events insert failed:', (e as Error).message);
+    // No verdict: no pm_events row (as before), and attribution is still fed.
+    console.error('[collect] visitor classification failed:', (e as Error).message);
   }
 
-  const mapped = mapBatch(batch);
-  const ingested = {
-    clickstream: await ingestSource('clickstream', mapped.clickstream),
-    identity: await ingestSource('identity', mapped.identity),
-    conversions: await ingestSource('conversions', mapped.conversions),
-  };
+  // ── raw visitor events: every event, enriched (IP, geo, UA, bot) ──────────
+  // Bots included: the Visitors page, the humans-vs-bots split and the AI
+  // crawler views read these rows.
+  let stored = 0;
+  if (visitor) {
+    try {
+      const rows = buildEventRows(batch, {
+        tenantId: key.tenantId,
+        pixelId: key.kind === 'pixel' ? key.keyId : null,
+        sourceKind: key.kind,
+        ip,
+        geo: lookupGeo(ip),
+        ua: visitor,
+        userAgent,
+        acceptLanguage: req.headers.get('accept-language'),
+      });
+      stored = await insertEvents(rows);
+    } catch (e) {
+      // Never let enrichment break attribution ingestion below.
+      console.error('[collect] pm_events insert failed:', (e as Error).message);
+    }
+  }
+
+  // ── attribution warehouse: everything except bot beacons from the pixel ───
+  // A bot beacon from the pixel (Googlebot renders pages all night) writes no
+  // recipe rows, so it doesn't re-arm the full-table attribution + scorecard
+  // rebuild. S2S batches are always ingested.
+  const ingested = { clickstream: 0, identity: 0, conversions: 0 };
+  const attributable = shouldIngestForAttribution(key.kind, visitor);
+  if (attributable) {
+    const mapped = mapBatch(batch);
+    ingested.clickstream = await ingestSource('clickstream', mapped.clickstream);
+    ingested.identity = await ingestSource('identity', mapped.identity);
+    ingested.conversions = await ingestSource('conversions', mapped.conversions);
+  }
 
   // Keep attribution + scorecard current, but only when something landed.
   const total = ingested.clickstream + ingested.identity + ingested.conversions;
   if (total > 0) scheduleRebuild();
 
-  return NextResponse.json({ data: { accepted: batch.events?.length ?? 0, stored, ingested } }, { headers: cors });
+  // Same shape as before; `skipped` is added only when the gate held the batch back.
+  const data = { accepted: batch.events?.length ?? 0, stored, ingested, ...(attributable ? {} : { skipped: 'bot' as const }) };
+  return NextResponse.json({ data }, { headers: cors });
 }
 
 function hostOf(u: string | null): string | null {

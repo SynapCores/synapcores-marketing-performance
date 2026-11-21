@@ -132,6 +132,8 @@ step on the roadmap.)
 **4. Verify it's flowing.** Open a tracked page (e.g. with
 `?utm_source=facebook&utm_campaign=fb-1001&fbclid=demo`), then in the app open
 **Data Tables → Click Events** — you'll see the hit, with your domain in `site`.
+Use a normal browser: hits from bots, headless browsers and scripted clients
+(curl, test runners) are kept out of the warehouse and show only on **Visitors**.
 A ready-made local test page lives at `/collect-demo.html`.
 
 **How it works.** `public/track.js` batches events and POSTs them to

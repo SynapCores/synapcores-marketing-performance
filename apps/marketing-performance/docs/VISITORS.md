@@ -3,7 +3,10 @@
 The collector (`POST /api/v1/collect`) stores **every** event the pixel sends in
 `pm_events`, one row per event, enriched on the server. The recipe tables
 (`recipe_pm_click_events`, `recipe_pm_conversions`, `recipe_pm_identity`) are
-still fed exactly as before, so attribution is unchanged.
+still fed as before, except for browser-pixel batches from a bot (a declared
+bot UA or a crawler IP, see below): those go to `pm_events` only, so crawler
+renders don't re-arm the attribution + scorecard rebuild. Server-to-server
+(`sk_`) batches always feed the recipe tables.
 
 | Group | Columns |
 |---|---|
