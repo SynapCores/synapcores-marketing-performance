@@ -12,10 +12,13 @@
  * Why still DROP once per process: CREATE TABLE IF NOT EXISTS leaves an
  * existing table alone. A deploy that changes the derived tables' DDL only
  * takes effect once they are dropped, so the first rebuild in each process
- * drops and re-creates them (one DROP per process start).
+ * drops and re-creates them.
  */
 
-/** Written only by the rebuild and loadSampleData(), recomputed in full each time. */
+/**
+ * Filled only by the rebuild and loadSampleData(), recomputed in full each
+ * time. clearAll() drops them along with the base tables.
+ */
 export const DERIVED_TABLES = ['recipe_pm_attribution', 'recipe_pm_campaign_scorecard'] as const;
 
 export type DerivedClearMode = 'drop' | 'delete';

@@ -68,9 +68,11 @@ function schemaChanged(): void {
 // Attribution + scorecard are rebuilt by the collector's timer, after every
 // ingest API call and CSV upload, and from the Rebuild button, so rebuilds can
 // overlap. loadSampleData() and clearAll() write the same tables. All of them
-// run one at a time through one queue, so their DROP / DELETE / INSERT
-// statements never interleave; rebuild callers share a rebuild that hasn't
-// started yet. The queue lives on globalThis like the schema state, so route
+// run one at a time through one queue, so within this process their DROP /
+// DELETE / INSERT statements never interleave; rebuild callers share a rebuild
+// that hasn't started yet. Not covered: other app processes on the same engine,
+// and a statement the client gave up on (request timeout) that is still running
+// on the engine. The queue lives on globalThis like the schema state, so route
 // handlers and server actions share it. `recreated`: this process has dropped
 // and re-created the derived tables; later rebuilds DELETE instead (see
 // derived-rebuild.ts).
@@ -123,6 +125,8 @@ export function loadSampleData(): Promise<void> {
   return runExclusive(derivedState(), async () => {
     try {
       await clearAllNow(); // not clearAll(): that would queue behind this task
+      // Leaves `recreated` as it is: clearAllNow() ignores DROP errors, so a
+      // derived table from before this process could survive with older DDL.
       await ensureSchema();
       for (const stmt of SEED) await run(stmt);
       await run(ATTRIBUTION);
