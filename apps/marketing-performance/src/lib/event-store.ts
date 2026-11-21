@@ -519,9 +519,18 @@ export interface VisitorBreakdown {
   bots_by_name: Array<{ bot_name: string; bot_category: string; bot_verified: string | null; events: number }>;
 }
 
+/**
+ * Start of a "last N days" window, rounded down to 5 minutes so the bound
+ * parameter (and so the report-cache key) stays the same between renders.
+ */
+export function windowStart(days: number, now = Date.now()): string {
+  const step = 5 * 60_000;
+  return sqlTs(new Date(Math.floor((now - days * 86400_000) / step) * step));
+}
+
 export async function visitorBreakdown(tenantId: string, days = 30): Promise<VisitorBreakdown> {
   await ensureEventsTable();
-  const since = sqlTs(new Date(Date.now() - days * 86400_000));
+  const since = windowStart(days);
   const rdb = reportDb(tenantId);
   const [perVisitor, bots, ctx] = await Promise.all([
     rdb.sql<Row>(
@@ -575,7 +584,7 @@ export async function visitorBreakdown(tenantId: string, days = 30): Promise<Vis
  */
 export async function conversionFunnel(tenantId: string, days = 30): Promise<FunnelReport & { since: string; truncated: boolean }> {
   await ensureEventsTable();
-  const since = sqlTs(new Date(Date.now() - days * 86400_000));
+  const since = windowStart(days);
   const cap = 50_000;
   const r = await reportDb(tenantId).sql<Row>(
     `SELECT site, event_type, anonymous_id, COUNT(*) AS events
