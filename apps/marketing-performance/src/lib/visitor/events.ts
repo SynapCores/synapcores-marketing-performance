@@ -6,7 +6,8 @@
  * User-Agent + bot verdict, the client IP (as seen through our proxy) and the
  * IP-derived approximate location. The recipe tables (click events /
  * conversions / identity) are still fed separately by `mapBatch`, except for
- * bot batches from the pixel (see `shouldIngestForAttribution`).
+ * pixel batches from search, SEO and AI crawlers (see
+ * `shouldIngestForAttribution`).
  *
  * Pure: enrichment inputs (IP, geo, parsed UA, clock, id generator) are passed
  * in, so this is unit tested without a database or GeoIP file.

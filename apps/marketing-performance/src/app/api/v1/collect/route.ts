@@ -213,10 +213,11 @@ export async function POST(req: Request) {
     }
   }
 
-  // ── attribution warehouse: everything except bot beacons from the pixel ───
-  // A bot beacon from the pixel (Googlebot renders pages all night) writes no
-  // recipe rows, so it doesn't re-arm the full-table attribution + scorecard
-  // rebuild. S2S batches are always ingested.
+  // ── attribution warehouse: everything except pixel beacons from crawlers ───
+  // A pixel beacon from a search, SEO or AI crawler (Googlebot renders pages all
+  // night) writes no recipe rows, so it doesn't re-arm the full-table
+  // attribution + scorecard rebuild. User-initiated AI agents, every other bot
+  // and all S2S batches are ingested as before (shouldIngestForAttribution).
   const ingested = { clickstream: 0, identity: 0, conversions: 0 };
   const attributable = shouldIngestForAttribution(key.kind, visitor);
   if (attributable) {

@@ -11,6 +11,7 @@
  * testable on its own. The route handler (`/api/v1/collect`) owns auth + the
  * actual writes.
  */
+import type { BotCategory } from './visitor/ua';
 
 /** One event inside a beacon batch (shape produced by `EcommTracker.track`). */
 export interface BeaconEvent {
@@ -208,28 +209,69 @@ export function mapBatch(batch: BeaconBatch): MappedBatch {
 export type CollectSourceKind = 'pixel' | 'key' | 'dev';
 
 /**
- * Should a batch feed the attribution warehouse (click events, identity,
- * conversions)? This gates only the recipe tables, because each write there
- * re-arms the full-table attribution + scorecard rebuild; bot batches are still
- * stored in `pm_events`.
+ * `ai` bots that fetch or browse for a live person at that moment (a chat
+ * prompt, a search query, an agent task, a link the person shared). They keep
+ * feeding attribution; every other `ai` bot counts as a crawler. Matched
+ * against `botName`: the UA-table names in visitor/ua.ts and the crawler-range
+ * labels in visitor/crawler-sources.json. Adjust the list here.
  *
- *   - Server-to-server (`key`): always. A CAPI conversion is never dropped, even
- *     when the end-user UA it forwards (or the customer server's own UA) looks
- *     automated.
- *   - Browser pixel (`pixel`): only when the visitor is not a bot, i.e. neither
- *     a declared bot UA (crawlers, AI agents, headless browsers, scripted HTTP
- *     clients) nor a browser UA from a published crawler range
- *     (`classifyVisitor().isBot`). In practice those visitors never carry the
- *     purchase + identify that attribution joins on, so their rows only cost
- *     a rebuild.
- *   - Local dev fallback (`dev`, never in production): always, so scripted
- *     local beacons (curl, test runners) still reach attribution.
- *   - No verdict (classification failed): ingest, as before the gate existed.
+ *   -User                 ChatGPT-User, Claude-User, Perplexity-User, MistralAI-User
+ *                         (also the 'ChatGPT-User (OpenAI)' / 'Perplexity-User' range labels)
+ *   ChatGPT Agent         OpenAI's agent, browsing (and buying) for a user
+ *   Google AI Agent       Google-Agent, Gemini Deep Research, NotebookLM
+ *   Meta-ExternalFetcher  Meta AI fetching a link a person shared
+ *   DuckAssistBot         fetches in real time for a DuckDuckGo query
+ *   Phind                 answer engine fetching pages for each question
+ *
+ * A name that covers a user-initiated agent and a crawler at once counts too:
+ *   Cohere                cohere-ai (user prompts) + cohere-training-data-crawler
+ *   Diffbot               the /Diffbot/ rule also matches Diffbot-User
+ *   Claude crawler        range label of Anthropic's one IP list for all its
+ *                         bots, Claude-User included
+ */
+export const USER_INITIATED_AI_BOT =
+  /-User\b|^(?:ChatGPT Agent|Google AI Agent|Meta-ExternalFetcher|DuckAssistBot|Phind|Cohere|Diffbot|Claude crawler)\b/;
+
+/** Is this bot (by `botName`) a user-initiated AI agent or fetcher? */
+export function isUserInitiatedBot(botName: string | null | undefined): boolean {
+  return !!botName && USER_INITIATED_AI_BOT.test(botName);
+}
+
+/** The part of a bot verdict the gate reads; a `classifyVisitor()` result fits. */
+export interface BotVerdict {
+  isBot: boolean;
+  botName?: string | null;
+  botCategory?: BotCategory | null;
+}
+
+/**
+ * Should a batch feed the attribution warehouse (click events, identity,
+ * conversions)? Each write there re-arms the full-table attribution +
+ * scorecard rebuild, so beacons from named crawlers that never act for a live
+ * person are kept out. They are still stored in `pm_events`.
+ *
+ * Skipped: browser-pixel (`pixel`) batches whose visitor is a bot in category
+ *   - `search` or `seo`: Googlebot (including Google's renderer, a plain Chrome
+ *     UA from Google's crawler ranges), Bingbot, AhrefsBot, ...
+ *   - `ai`, unless user-initiated (USER_INITIATED_AI_BOT): GPTBot, ClaudeBot,
+ *     Meta-ExternalAgent, CCBot, ...
+ *
+ * Everything else is ingested, because a wrong bot verdict in those groups
+ * could cost real attribution: social unfurlers, monitors, scripted clients
+ * (`tool`, e.g. a server relaying `pk_` beacons with its own UA), headless
+ * browsers (including Electron desktop apps), `other` bots, user-initiated AI
+ * agents, a missing verdict (classification failed), and every
+ * server-to-server (`key`) or local dev (`dev`) batch. A headless, scripted or
+ * generic UA from a crawler's IP range is named after that crawler by
+ * classifyVisitor and gated like it (HeadlessChrome from 66.249.x is Googlebot).
  */
 export function shouldIngestForAttribution(
   sourceKind: CollectSourceKind,
-  visitor: { isBot: boolean } | null | undefined,
+  visitor: BotVerdict | null | undefined,
 ): boolean {
-  if (sourceKind !== 'pixel') return true;
-  return !visitor?.isBot;
+  if (sourceKind !== 'pixel' || !visitor?.isBot) return true;
+  const { botCategory, botName } = visitor;
+  if (botCategory === 'search' || botCategory === 'seo') return false;
+  if (botCategory === 'ai') return isUserInitiatedBot(botName);
+  return true;
 }

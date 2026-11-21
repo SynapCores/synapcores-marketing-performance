@@ -3,10 +3,17 @@
 The collector (`POST /api/v1/collect`) stores **every** event the pixel sends in
 `pm_events`, one row per event, enriched on the server. The recipe tables
 (`recipe_pm_click_events`, `recipe_pm_conversions`, `recipe_pm_identity`) are
-still fed as before, except for browser-pixel batches from a bot (a declared
-bot UA or a crawler IP, see below): those go to `pm_events` only, so crawler
-renders don't re-arm the attribution + scorecard rebuild. Server-to-server
-(`sk_`) batches always feed the recipe tables.
+still fed as before, except for browser-pixel batches from named crawlers that
+never act for a live person: search engines and SEO tools (Googlebot, including
+Google's renderer from its crawler ranges, Bingbot, AhrefsBot, ...) and AI
+crawlers (GPTBot, ClaudeBot, Meta-ExternalAgent, CCBot, ...). Those go to
+`pm_events` only, so crawler renders don't re-arm the attribution + scorecard
+rebuild. User-initiated AI agents and fetchers (ChatGPT-User, Claude-User,
+Perplexity-User, ChatGPT Agent, Meta-ExternalFetcher, ...; the list is
+`USER_INITIATED_AI_BOT` in `src/lib/collector.ts`), social link previews,
+monitors, headless browsers, scripted clients, other bots and every
+server-to-server (`sk_`) batch still feed the recipe tables. A headless or
+scripted client from a crawler's IP range counts as that crawler.
 
 | Group | Columns |
 |---|---|

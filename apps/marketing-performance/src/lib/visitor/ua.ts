@@ -34,6 +34,9 @@ export interface ParsedUA {
 type BotRule = [RegExp, string, BotCategory, CrawlerOperator?];
 const BOTS: BotRule[] = [
   // — AI crawlers, answer engines and agents —
+  // Each rule here needs a gate decision in tests/attribution-gate.test.ts (AI_RULES).
+  // A user-initiated agent/fetcher must also match USER_INITIATED_AI_BOT
+  // (../collector.ts); otherwise its pixel beacons stop feeding attribution.
   [/GPTBot/i, 'GPTBot (OpenAI)', 'ai', 'openai'],
   [/ChatGPT-User/i, 'ChatGPT-User (OpenAI)', 'ai', 'openai'],
   [/OAI-SearchBot/i, 'OAI-SearchBot (OpenAI)', 'ai', 'openai'],
@@ -149,6 +152,9 @@ const BOTS: BotRule[] = [
   [/okhttp|Apache-HttpClient|Java\//i, 'Java HTTP client', 'tool'],
   [/libwww-perl|PostmanRuntime|insomnia|HTTPie/i, 'HTTP tool', 'tool'],
 ];
+
+/** Names of the `ai` rules (tests check that each has a deliberate attribution-gate decision). */
+export const AI_BOT_NAMES: readonly string[] = [...new Set(BOTS.filter(([, , cat]) => cat === 'ai').map(([, name]) => name))];
 
 /** The operator whose published IP list can verify a UA claim (`null` = no list). */
 export function botOperator(botName: string | null): CrawlerOperator | null {
