@@ -4,16 +4,24 @@ The collector (`POST /api/v1/collect`) stores **every** event the pixel sends in
 `pm_events`, one row per event, enriched on the server. The recipe tables
 (`recipe_pm_click_events`, `recipe_pm_conversions`, `recipe_pm_identity`) are
 still fed as before, except for browser-pixel batches from named crawlers that
-never act for a live person: search engines and SEO tools (Googlebot, including
-Google's renderer from its crawler ranges, Bingbot, AhrefsBot, ...) and AI
-crawlers (GPTBot, ClaudeBot, Meta-ExternalAgent, CCBot, ...). Those go to
-`pm_events` only, so crawler renders don't re-arm the attribution + scorecard
-rebuild. User-initiated AI agents and fetchers (ChatGPT-User, Claude-User,
-Perplexity-User, ChatGPT Agent, Meta-ExternalFetcher, ...; the list is
-`USER_INITIATED_AI_BOT` in `src/lib/collector.ts`), social link previews,
-monitors, headless browsers, scripted clients, other bots and every
-server-to-server (`sk_`) batch still feed the recipe tables. A headless or
-scripted client from a crawler's IP range counts as that crawler.
+never act for a live person:
+
+- search crawlers whose operator publishes IP ranges, real or spoofed
+  (`bot_verified` = `verified` / `unverified`): Googlebot, including Google's
+  renderer from its crawler ranges, Bingbot, Applebot, DuckDuckBot, ...;
+- SEO tools (AhrefsBot, SemrushBot, ...);
+- AI crawlers (GPTBot, ClaudeBot, Meta-ExternalAgent, CCBot, ...).
+
+Those go to `pm_events` only, so crawler renders don't re-arm the attribution +
+scorecard rebuild. Everything else still feeds the recipe tables: search bots
+with no published list (`unverifiable`: YandexBot, Baiduspider, Sogou,
+SeznamBot, Naver Yeti, ...; their UA rules also match real browsers such as
+Sogou Mobile Browser and the Yandex app), user-initiated AI agents and fetchers
+(ChatGPT-User, Claude-User, Perplexity-User, ChatGPT Agent,
+Meta-ExternalFetcher, ...; the list is `USER_INITIATED_AI_BOT` in
+`src/lib/collector.ts`), social link previews, monitors, headless browsers,
+scripted clients, other bots and every server-to-server (`sk_`) batch. A
+headless or scripted client from a crawler's IP range counts as that crawler.
 
 | Group | Columns |
 |---|---|

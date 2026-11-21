@@ -11,6 +11,7 @@
  * testable on its own. The route handler (`/api/v1/collect`) owns auth + the
  * actual writes.
  */
+import type { BotVerification } from './visitor/classify';
 import type { BotCategory } from './visitor/ua';
 
 /** One event inside a beacon batch (shape produced by `EcommTracker.track`). */
@@ -249,6 +250,12 @@ export interface BotVerdict {
   isBot: boolean;
   botName?: string | null;
   botCategory?: BotCategory | null;
+  /**
+   * The check against the operators' published crawler ranges. 'verified' /
+   * 'unverified': the UA or IP matched an operator that publishes ranges
+   * (real or spoofed); 'unverifiable': no published list to check against.
+   */
+  botVerified?: BotVerification | null;
 }
 
 /**
@@ -258,13 +265,20 @@ export interface BotVerdict {
  * person are kept out. They are still stored in `pm_events`.
  *
  * Skipped: browser-pixel (`pixel`) batches whose visitor is a bot in category
- *   - `search` or `seo`: Googlebot (including Google's renderer, a plain Chrome
- *     UA from Google's crawler ranges), Bingbot, AhrefsBot, ...
+ *   - `search`, when its UA or IP matched an operator that publishes crawler
+ *     ranges, real or spoofed (botVerified 'verified' or 'unverified'):
+ *     Googlebot (including Google's renderer, a plain Chrome UA from Google's
+ *     crawler ranges), Bingbot, Applebot, DuckDuckBot, ... A person never
+ *     sends those tokens.
+ *   - `seo`: AhrefsBot, SemrushBot, ...
  *   - `ai`, unless user-initiated (USER_INITIATED_AI_BOT): GPTBot, ClaudeBot,
  *     Meta-ExternalAgent, CCBot, ...
  *
  * Everything else is ingested, because a wrong bot verdict in those groups
- * could cost real attribution: social unfurlers, monitors, scripted clients
+ * could cost real attribution: search bots with no published list
+ * ('unverifiable': YandexBot, Baiduspider, Sogou, SeznamBot, Naver Yeti,
+ * MojeekBot, ...; those UA rules also match real browsers such as Sogou Mobile
+ * Browser and the Yandex app), social unfurlers, monitors, scripted clients
  * (`tool`, e.g. a server relaying `pk_` beacons with its own UA), headless
  * browsers (including Electron desktop apps), `other` bots, user-initiated AI
  * agents, a missing verdict (classification failed), and every
@@ -277,8 +291,9 @@ export function shouldIngestForAttribution(
   visitor: BotVerdict | null | undefined,
 ): boolean {
   if (sourceKind !== 'pixel' || !visitor?.isBot) return true;
-  const { botCategory, botName } = visitor;
-  if (botCategory === 'search' || botCategory === 'seo') return false;
+  const { botCategory, botName, botVerified } = visitor;
+  if (botCategory === 'search') return botVerified !== 'verified' && botVerified !== 'unverified';
+  if (botCategory === 'seo') return false;
   if (botCategory === 'ai') return isUserInitiatedBot(botName);
   return true;
 }

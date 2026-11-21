@@ -1,10 +1,12 @@
 /**
  * Collector attribution gate. Browser-pixel beacons from named crawlers that
- * never act for a live person (search engines, SEO tools, AI crawlers) are
- * kept in pm_events (Visitors, humans-vs-bots, AI crawler views) but not
- * written to the recipe tables, so they stop re-arming the full-table
- * attribution + scorecard rebuild. Everything else, where a wrong bot verdict
- * could cost real attribution, is ingested as before: user-initiated AI agents,
+ * never act for a live person (search crawlers whose operator publishes IP
+ * ranges, SEO tools, AI crawlers) are kept in pm_events (Visitors,
+ * humans-vs-bots, AI crawler views) but not written to the recipe tables, so
+ * they stop re-arming the full-table attribution + scorecard rebuild.
+ * Everything else, where a wrong bot verdict could cost real attribution, is
+ * ingested as before: search bots with no published list (their UA rules also
+ * match Sogou Mobile Browser and the Yandex app), user-initiated AI agents,
  * social previews, monitors, headless browsers (Electron apps), scripted
  * clients, other bots, a missing verdict, and every S2S / dev batch.
  *
@@ -18,7 +20,7 @@ import assert from 'node:assert/strict';
 import bundled from '../src/lib/visitor/crawler-ranges.bundled.json';
 import { CrawlerMatcher, RANGE_SOURCES, type RangeSet } from '../src/lib/visitor/crawler-ranges';
 import { classifyVisitor } from '../src/lib/visitor/classify';
-import { AI_BOT_NAMES } from '../src/lib/visitor/ua';
+import { AI_BOT_NAMES, botOperator } from '../src/lib/visitor/ua';
 import { buildEventRows } from '../src/lib/visitor/events';
 import { EMPTY_GEO } from '../src/lib/visitor/geo';
 import {
@@ -44,6 +46,11 @@ const UA = {
   googlebotSmartphone: `${NEXUS} (compatible; Googlebot/2.1; +http://www.google.com/bot.html)`,
   googleRendererPlain: NEXUS, // Google's renderer with no bot token: a bot only by its IP
   headless: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/131.0.0.0 Safari/537.36',
+  bingbot: 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm) Chrome/136.0.0.0 Safari/537.36',
+  sogouMobileBrowser: 'Mozilla/5.0 (Linux; Android 10; V2001A) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Mobile Safari/537.36 SogouMSE,SogouMobileBrowser/5.37.6',
+  yandexApp: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 YaBrowser/24.6.1.402.10 SA/3 Mobile/15E148 Safari/604.1 YandexSearch/7.42',
+  yandexBot: 'Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)',
+  baiduspider: 'Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)',
   gptbot: 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)',
   ahrefs: 'Mozilla/5.0 (compatible; AhrefsBot/7.0; +http://ahrefs.com/robot/)',
   metaAgent: 'meta-externalagent/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler)',
@@ -67,6 +74,7 @@ const UA = {
 };
 const IP = {
   google: '66.249.66.12', // googlebot.json
+  bing: inList('bing'), // bingbot.json
   residential: '136.57.16.80',
   hosting: '34.31.203.120', // in no published crawler list
   gptbot: '132.196.86.5', // openai gptbot.json
@@ -78,28 +86,81 @@ const IP = {
   claudeAgent: '34.31.25.14', // claude.com/.well-known/sail (Claude-Agent), in no bundled list
 };
 
-type Case = [label: string, ua: string, ip: string | null, category: string, name?: string];
+type Case = [label: string, ua: string, ip: string | null, category: string, name?: string, verified?: string];
 
 /** Classify for real, check the verdict, then return the gate's decision for a pixel batch. */
-function pixelGate([label, ua, ip, category, name]: Case): boolean {
+function pixelGate([label, ua, ip, category, name, verified]: Case): boolean {
   const v = classifyVisitor(ua, ip, M);
   assert.equal(v.isBot, true, `${label}: isBot`);
   assert.equal(v.botCategory, category, `${label}: category`);
   if (name) assert.equal(v.botName, name, `${label}: name`);
+  if (verified) assert.equal(v.botVerified, verified, `${label}: botVerified`);
   return shouldIngestForAttribution('pixel', v);
 }
 
-test('pixel: search, SEO and AI crawlers are not ingested for attribution', () => {
+// Search engines that publish crawler ranges: classifyVisitor always says
+// 'verified' (IP in the operator's list) or 'unverified' (the UA claims it, the
+// IP isn't).
+const LISTED_SEARCH: Array<[ua: string, name: string]> = [
+  [UA.googlebotSmartphone, 'Googlebot'],
+  [`${NEXUS} (compatible; Google-InspectionTool/1.0;)`, 'Google-InspectionTool'],
+  ['AdsBot-Google (+http://www.google.com/adsbot.html)', 'AdsBot-Google'],
+  [UA.bingbot, 'Bingbot'],
+  ['Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.1.1 Safari/605.1.15 (Applebot/0.1; +http://www.apple.com/go/applebot)', 'Applebot'],
+  ['DuckDuckBot/1.1; (+http://duckduckgo.com/duckduckbot.html)', 'DuckDuckBot'],
+];
+// Search engines with no published list: only ever 'unverifiable'.
+const NO_LIST_SEARCH: Array<[ua: string, name: string]> = [
+  [UA.yandexBot, 'YandexBot'],
+  [UA.baiduspider, 'Baiduspider'],
+  ['Sogou web spider/4.0(+http://www.sogou.com/docs/help/webmasters.htm#07)', 'Sogou'],
+  ['Mozilla/5.0 (compatible; SeznamBot/4.0; +https://o-seznam.cz/napoveda/vyhledavani/en/seznambot-crawler/)', 'SeznamBot'],
+  ['Mozilla/5.0 (compatible; Yeti/1.1; +https://naver.me/spd)', 'Naver Yeti'],
+  ['Mozilla/5.0 (compatible; MojeekBot/0.11; +https://www.mojeek.com/bot.html)', 'MojeekBot'],
+  ['Mozilla/5.0 (compatible; Yahoo! Slurp; http://help.yahoo.com/help/us/ysearch/slurp)', 'Yahoo Slurp'],
+  ['Mozilla/5.0 (compatible; Qwantbot/1.0; +https://help.qwant.com/bot/)', 'Qwantbot'],
+  ['Mozilla/5.0 (compatible; coccocbot-web/1.0; +http://help.coccoc.com/searchengine)', 'CocCocBot'],
+  ['Mozilla/5.0 (compatible; Bravebot/1.0; +https://search.brave.com/help/brave-search-crawler)', 'BraveBot'],
+];
+
+test('pixel: range-checked search crawlers, SEO tools and AI crawlers are not ingested for attribution', () => {
   const cases: Case[] = [
-    ['verified Googlebot', UA.googlebotSmartphone, IP.google, 'search', 'Googlebot'],
-    ['Google renderer: plain Nexus 5X Chrome UA from 66.249.66.x (range hit)', UA.googleRendererPlain, IP.google, 'search', 'Googlebot'],
-    ['Google renderer: HeadlessChrome from 66.249.66.x (range hit)', UA.headless, IP.google, 'search', 'Googlebot'],
-    ['Googlebot claimed from a residential IP (unverified, still search)', UA.googlebotSmartphone, IP.residential, 'search', 'Googlebot'],
+    ['declared Googlebot from its range', UA.googlebotSmartphone, IP.google, 'search', 'Googlebot', 'verified'],
+    ['Google renderer: plain Nexus 5X Chrome UA from 66.249.66.x (range hit)', UA.googleRendererPlain, IP.google, 'search', 'Googlebot', 'verified'],
+    ['Google renderer: HeadlessChrome from 66.249.66.x (range hit)', UA.headless, IP.google, 'search', 'Googlebot', 'verified'],
+    ['spoofed Googlebot UA from a non-Google IP', UA.googlebotSmartphone, IP.residential, 'search', 'Googlebot', 'unverified'],
+    ['Bingbot from a Bing range', UA.bingbot, IP.bing, 'search', 'Bingbot', 'verified'],
+    ["a no-list search UA from a Google crawler IP (the IP is a crawler's)", UA.yandexBot, '66.249.66.1', 'search', 'YandexBot', 'verified'],
     ['Meta-ExternalAgent', UA.metaAgent, IP.hosting, 'ai', 'Meta-ExternalAgent'],
     ['GPTBot from its published range', UA.gptbot, IP.gptbot, 'ai', 'GPTBot (OpenAI)'],
     ['AhrefsBot', UA.ahrefs, IP.hosting, 'seo', 'AhrefsBot'],
   ];
   for (const c of cases) assert.equal(pixelGate(c), false, c[0]);
+});
+
+test("pixel: search bots with no published list ('unverifiable') are ingested, as on prod", () => {
+  const cases: Case[] = [
+    // Real people: those engines' broad UA rules also match their browsers and apps.
+    ['Sogou Mobile Browser (a person)', UA.sogouMobileBrowser, IP.residential, 'search', 'Sogou', 'unverifiable'],
+    ['Yandex app with its YandexSearch/ token (a person)', UA.yandexApp, IP.residential, 'search', 'YandexBot', 'unverifiable'],
+    ...NO_LIST_SEARCH.map(([ua, name]): Case => [`declared ${name}`, ua, IP.hosting, 'search', name, 'unverifiable']),
+  ];
+  for (const c of cases) assert.equal(pixelGate(c), true, c[0]);
+});
+
+test('declared search bots are skipped exactly when their operator publishes crawler ranges', () => {
+  for (const [ua, name] of [...LISTED_SEARCH, ...NO_LIST_SEARCH]) {
+    const v = classifyVisitor(ua, IP.hosting, M); // an IP in no published list
+    const listed = botOperator(name) !== null;
+    assert.deepEqual([v.botCategory, v.botName], ['search', name], ua);
+    assert.equal(v.botVerified, listed ? 'unverified' : 'unverifiable', name);
+    assert.equal(shouldIngestForAttribution('pixel', v), !listed, name);
+  }
+  // The same bots from their operators' own ranges are 'verified' and skipped.
+  for (const [ua, name, ip] of [[UA.googlebotSmartphone, 'Googlebot', IP.google], [UA.bingbot, 'Bingbot', IP.bing]] as const) {
+    const v = classifyVisitor(ua, ip, M);
+    assert.deepEqual([v.botName, v.botVerified, shouldIngestForAttribution('pixel', v)], [name, 'verified', false], name);
+  }
 });
 
 test('pixel: user-initiated AI agents and fetchers are ingested', () => {
@@ -178,6 +239,9 @@ test('dev fallback and a missing verdict ingest, as before the gate existed', ()
     assert.equal(shouldIngestForAttribution(kind, null), true, kind);
     assert.equal(shouldIngestForAttribution(kind, undefined), true, kind);
   }
+  // A search verdict with no range check behind it is not enough to skip.
+  assert.equal(shouldIngestForAttribution('pixel', { isBot: true, botCategory: 'search', botName: 'Googlebot' }), true);
+  assert.equal(shouldIngestForAttribution('pixel', { isBot: true, botCategory: 'search', botName: 'Googlebot', botVerified: null }), true);
 });
 
 // Every `ai` rule in visitor/ua.ts, with its decision. A new or renamed ai rule
