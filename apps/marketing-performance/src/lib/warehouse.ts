@@ -3,6 +3,7 @@ import { getAdminClient } from '@synapcores/app-framework/db/server';
 import { invalidateReports, reportDb } from './report-db';
 import { SCHEMA, TABLES, SEED, ATTRIBUTION, SCORECARD, QUERIES, AGENT_TASK } from './recipe-sql';
 import { SOURCES, mapRows } from './sources';
+import { rebuildDerivedWith, runExclusive, runShared, type WriterQueue } from './derived-rebuild';
 
 /**
  * The performance-marketing warehouse — recipe 121 as a first-class data layer.
@@ -63,7 +64,35 @@ function schemaChanged(): void {
   schemaState().ready = null;
 }
 
-export async function clearAll() {
+// ── derived tables ──────────────────────────────────────────────────────────
+// Attribution + scorecard are rebuilt by the collector's timer, after every
+// ingest API call and CSV upload, and from the Rebuild button, so rebuilds can
+// overlap. loadSampleData() and clearAll() write the same tables. All of them
+// run one at a time through one queue, so within this process their DROP /
+// DELETE / INSERT statements never interleave; rebuild callers share a rebuild
+// that hasn't started yet. Not covered: other app processes on the same engine,
+// and a statement the client gave up on (request timeout) that is still running
+// on the engine. The queue lives on globalThis like the schema state, so route
+// handlers and server actions share it. `recreated`: this process has dropped
+// and re-created the derived tables; later rebuilds DELETE instead (see
+// derived-rebuild.ts).
+const DERIVED_STATE = Symbol.for('synapcores.marketing-performance.warehouse-derived');
+type DerivedState = WriterQueue & { recreated: boolean };
+function derivedState(): DerivedState {
+  const g = globalThis as unknown as Record<symbol, DerivedState | undefined>;
+  let s = g[DERIVED_STATE];
+  if (!s) {
+    s = { recreated: false, tail: Promise.resolve(), pending: null };
+    g[DERIVED_STATE] = s;
+  }
+  return s;
+}
+
+export function clearAll(): Promise<void> {
+  return runExclusive(derivedState(), clearAllNow);
+}
+
+async function clearAllNow() {
   try {
     for (const t of TABLES) { try { await run(`DROP TABLE IF EXISTS ${t}`); } catch { /* ignore */ } }
   } finally {
@@ -72,34 +101,40 @@ export async function clearAll() {
   }
 }
 
-/** Recompute attribution + scorecard from the base tables (Steps 7 & 10). */
-export async function rebuildDerived() {
-  try {
-    try {
-      await run(`DROP TABLE IF EXISTS recipe_pm_attribution`);
-      await run(`DROP TABLE IF EXISTS recipe_pm_campaign_scorecard`);
-    } finally {
-      schemaChanged();
-    }
-    await ensureSchema();
-    await run(ATTRIBUTION);
-    await run(SCORECARD);
-  } finally {
-    invalidateReports();
-  }
+/**
+ * Recompute attribution + scorecard from the base tables (Steps 7 & 10). The
+ * first rebuild in a process drops and re-creates both tables; later ones
+ * DELETE their rows, and fall back to the DROP path for that run if a DELETE
+ * fails (e.g. a table was dropped outside the app).
+ */
+export function rebuildDerived(): Promise<void> {
+  const s = derivedState();
+  return runShared(s, () => rebuildDerivedWith(s, {
+    run,
+    ensureSchema,
+    schemaChanged,
+    invalidateReports: () => invalidateReports(),
+    warn: (message) => console.warn(message),
+    attribution: ATTRIBUTION,
+    scorecard: SCORECARD,
+  }));
 }
 
 /** One-click: wipe, recreate, seed the recipe-121 sample dataset, rebuild derived. */
-export async function loadSampleData() {
-  try {
-    await clearAll();
-    await ensureSchema();
-    for (const stmt of SEED) await run(stmt);
-    await run(ATTRIBUTION);
-    await run(SCORECARD);
-  } finally {
-    invalidateReports();
-  }
+export function loadSampleData(): Promise<void> {
+  return runExclusive(derivedState(), async () => {
+    try {
+      await clearAllNow(); // not clearAll(): that would queue behind this task
+      // Leaves `recreated` as it is: clearAllNow() ignores DROP errors, so a
+      // derived table from before this process could survive with older DDL.
+      await ensureSchema();
+      for (const stmt of SEED) await run(stmt);
+      await run(ATTRIBUTION);
+      await run(SCORECARD);
+    } finally {
+      invalidateReports();
+    }
+  });
 }
 
 // ── ingestion ────────────────────────────────────────────────────────────────
