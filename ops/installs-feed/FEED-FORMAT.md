@@ -25,7 +25,8 @@ Privacy rules (enforced by the writer, checked again by the app's importer):
   passed in with systemd `LoadCredential=`).
 - Fields copied from telemetry are attacker-writable (the ingest endpoint is public), so each has a strict
   format and anything else becomes `null`: `country` = two capital letters; versions and `latest_release` =
-  `[v]N.N.N[-tag[.x]]`; `deployment`, `os`, `arch` = a letter followed by up to 23 of `[A-Za-z0-9_-]`. None of
+  `[v]N.N.N[-tag[.x]]` (a 4-part version such as `1.14.1.1-ce` can't be told apart from an IPv4 address, so it
+  becomes `null`; so far only CI installs reported one); `deployment`, `os`, `arch` = a letter followed by up to 23 of `[A-Za-z0-9_-]`. None of
   these formats can spell an IP address. All of them also fit the app's general rule: at most 40 chars of
   `[A-Za-z0-9._+ -]`.
 

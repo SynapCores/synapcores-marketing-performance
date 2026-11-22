@@ -265,6 +265,7 @@ class Privacy(unittest.TestCase):
         self.assertIsNone(F.txt("x" * 41))
         self.assertIsNone(F.txt("a;b"))
         self.assertIsNone(F.txt("10.1.2.3"))
+        self.assertTrue(F.IPV4_ANY.search("host.10.1.2.3"))
         self.assertEqual(F.txt("2.5.1-ce", "version"), "2.5.1-ce")
         self.assertEqual(F.txt("v2.5.1-ce", "version"), "v2.5.1-ce")
         self.assertIsNone(F.txt("2.5.1-ce"))  # not a word

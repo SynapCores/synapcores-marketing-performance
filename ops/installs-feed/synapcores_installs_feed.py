@@ -92,7 +92,7 @@ FIELD_OK = {
     "version": re.compile(r"v?[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:-[A-Za-z][A-Za-z0-9]{0,15}(?:\.[A-Za-z0-9]{1,16})?)?"),
     "word": re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,23}"),  # deployment, os, arch: docker, bare-metal, linux, x86_64
 }
-IPV4_ANY = re.compile(r"(?<![0-9.])[0-9]{1,3}(?:\.[0-9]{1,3}){3}(?![0-9])")
+IPV4_ANY = re.compile(r"(?<![0-9])[0-9]{1,3}(?:\.[0-9]{1,3}){3}(?![0-9])")  # "host.10.1.2.3" matches too
 COLON_TOKEN = re.compile(r"[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*")
 V6_PREFIX = 40  # IPv6 networks are written as /40: ~256 customer /48s, the same anonymity set as an IPv4 /24
 NET_OK = re.compile(r"(?:[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,2}::/40)")
