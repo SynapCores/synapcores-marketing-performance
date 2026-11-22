@@ -16,6 +16,10 @@ import { Button } from '../ui/button';
  * The framework's top bar. Renders the current tenant name + a user
  * menu (profile, settings, sign-out). Apps may inject extra slots —
  * notifications, search, etc. — via the `right` prop.
+ *
+ * Sticky (the page scrolls on the window), so the mobile menu button and the
+ * user menu stay reachable on long pages. z-40 keeps it under the mobile
+ * drawer and Radix overlays (z-50); bg-card is opaque.
  */
 export function TopBar({
   tenantName,
@@ -35,7 +39,7 @@ export function TopBar({
   left?: React.ReactNode;
 }) {
   return (
-    <header className="h-14 border-b border-border bg-card flex items-center justify-between px-4 md:px-6">
+    <header className="sticky top-0 z-40 h-14 border-b border-border bg-card flex items-center justify-between px-4 md:px-6">
       <div className="flex items-center gap-3 min-w-0">
         {left}
         {tenantName && (

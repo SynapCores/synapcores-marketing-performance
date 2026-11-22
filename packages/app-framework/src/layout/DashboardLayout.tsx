@@ -35,7 +35,7 @@ export function DashboardLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
+    <div className="flex min-h-screen supports-[min-height:100dvh]:min-h-dvh bg-background text-foreground">
       <Sidebar sections={sidebar} brand={brand} />
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar

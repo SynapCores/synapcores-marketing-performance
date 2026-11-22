@@ -33,7 +33,11 @@ export function Sidebar({
   brand: { label: string; href: string };
 }) {
   return (
-    <aside className="hidden md:flex md:flex-col w-60 shrink-0 border-r border-border bg-card">
+    // Sticky and as tall as the visible viewport (the page scrolls on the window), so the
+    // links stay reachable on long pages; the link list scrolls inside on short screens
+    // (phones in landscape get this layout). h-screen is the fallback for browsers without
+    // dvh; the supports- variant is emitted after it, so dvh wins where it exists.
+    <aside className="hidden md:flex md:flex-col md:sticky md:top-0 md:h-screen md:supports-[height:100dvh]:h-dvh w-60 shrink-0 border-r border-border bg-card">
       <div className="h-14 flex items-center px-5 border-b border-border">
         <Link
           prefetch={false}
@@ -44,7 +48,8 @@ export function Sidebar({
         </Link>
       </div>
 
-      <SidebarNav sections={sections} />
+      {/* 44px links on touch screens (phones in landscape, tablets); mouse desktops unchanged */}
+      <SidebarNav sections={sections} itemClassName="[@media(pointer:coarse)]:py-3" />
     </aside>
   );
 }
@@ -57,12 +62,15 @@ export function SidebarNav({
   sections,
   onNavigate,
   className,
+  itemClassName,
   ariaLabel = 'Main',
 }: {
   sections: SidebarSection[];
   /** Called when a link is activated (the mobile drawer closes on it). */
   onNavigate?: () => void;
   className?: string;
+  /** Extra classes for each link (the mobile drawer uses taller tap targets). */
+  itemClassName?: string;
   ariaLabel?: string;
 }) {
   const pathname = usePathname() ?? '';
@@ -91,6 +99,7 @@ export function SidebarNav({
                     onClick={onNavigate}
                     className={cn(
                       'flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors',
+                      itemClassName,
                       active
                         ? 'bg-primary/10 text-primary'
                         : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
