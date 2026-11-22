@@ -49,7 +49,7 @@ export function ensureEventsTable(): Promise<void> {
   return ensured;
 }
 
-function lit(v: unknown): string {
+export function lit(v: unknown): string {
   if (v === null || v === undefined) return 'NULL';
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
   if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL';

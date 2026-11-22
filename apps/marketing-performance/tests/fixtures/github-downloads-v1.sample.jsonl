@@ -1,0 +1,5 @@
+{"type":"header","schema":"synapcores-github-downloads","version":1,"generated_at":"2026-11-21T06:40:00Z","repo":"SynapCores/synapcores-releases","counts":{"snapshot":4}}
+{"type":"snapshot","date":"2026-11-18","fetched_at":"2026-11-18T01:50:00Z","archives":700,"all_assets":1300,"by_platform":{"darwin-aarch64":100,"linux-aarch64":80,"linux-x86_64":520},"latest_release":"v2.5.0-ce","latest_archives":40}
+{"type":"snapshot","date":"2026-11-19","fetched_at":"2026-11-19T01:50:00Z","archives":730,"all_assets":1350,"by_platform":{"darwin-aarch64":105,"linux-aarch64":85,"linux-x86_64":540},"latest_release":"v2.5.0-ce","latest_archives":70}
+{"type":"snapshot","date":"2026-11-20","fetched_at":"2026-11-20T01:50:00Z","archives":760,"all_assets":1420,"by_platform":{"darwin-aarch64":120,"linux-aarch64":90,"linux-x86_64":550},"latest_release":"v2.5.1-ce","latest_archives":2}
+{"type":"snapshot","date":"2026-11-21","fetched_at":"2026-11-21T01:50:00Z","archives":812,"all_assets":1530,"by_platform":{"darwin-aarch64":120,"linux-aarch64":92,"linux-x86_64":600},"latest_release":"v2.5.1-ce","latest_archives":14}

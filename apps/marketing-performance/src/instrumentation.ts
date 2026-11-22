@@ -15,6 +15,24 @@
  *
  * 3. Report query cache (lib/report-db.ts): logs its settings at boot and its
  *    hit/miss counters every 15 min when there was report traffic.
+ *
+ * 4. Installs feed (lib/installs-store.ts): when INSTALLS_FEED_DIR is set, the
+ *    sanitized drop files written by the telemetry export job
+ *    (installs-v1.jsonl, github-downloads-v1.jsonl) are imported into
+ *    pm_install_feed ~45 s after boot, then every INSTALLS_FEED_IMPORT_MINUTES.
+ *    A file whose size + mtime didn't change is skipped; a file that fails
+ *    validation is logged ("rejected") and the stored rows stay. One log line
+ *    per import that changed rows or was refused. Env:
+ *      INSTALLS_FEED_DIR                  drop directory (prod /var/lib/synapcores-installs-feed);
+ *                                         unset = feature off (no import, no Installs page)
+ *      INSTALLS_FEED_TENANT_ID            workspace id that owns the rows and sees the Installs
+ *                                         page; required when INSTALLS_FEED_DIR is set
+ *      INSTALLS_FEED_IMPORT_MINUTES       import interval in minutes, default 5
+ *      INSTALLS_FEED_MAX_DELETE_FRACTION  refuse an import that would delete more than
+ *                                         max(10, fraction × stored rows); default 0.5. A salt
+ *                                         rotation (header salt_id changed) is always allowed.
+ *      INSTALLS_DOWNLOAD_SITES            sites whose /download page feeds the funnel tile,
+ *                                         default "synapcores.com,www.synapcores.com"
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
@@ -56,6 +74,25 @@ export async function register() {
     const first = setTimeout(run, 60_000);
     first.unref?.();
     const every = setInterval(run, sweepIntervalMs());
+    every.unref?.();
+  }
+
+  if (process.env.INSTALLS_FEED_DIR) {
+    const { importInstallsFeed, importIntervalMs } = await import('./lib/installs-store');
+    const { describeImport } = await import('./lib/installs/feed');
+    const run = async () => {
+      try {
+        for (const r of await importInstallsFeed()) {
+          const line = describeImport(r);
+          if (line) console.log(line);
+        }
+      } catch (e) {
+        console.error('[installs-feed] import failed:', (e as Error).message);
+      }
+    };
+    const first = setTimeout(run, 45_000);
+    first.unref?.();
+    const every = setInterval(run, importIntervalMs());
     every.unref?.();
   }
 
