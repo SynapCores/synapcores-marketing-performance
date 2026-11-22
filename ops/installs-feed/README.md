@@ -7,7 +7,7 @@ any access to the telemetry database, and without giving the export job any acce
 telemetry_events (telemetry engine, 127.0.0.1:8080, db main)
    │  export unit, every 15 min, User=bitnami, telemetry key via LoadCredential, egress: localhost only
    ▼
-/var/lib/synapcores-installs-feed/installs-v1.jsonl         sanitized: HMAC ids, /24 only, no full IPs
+/var/lib/synapcores-installs-feed/installs-v1.jsonl         sanitized: HMAC ids, /24 (IPv6 /40) only, no full IPs
 /var/lib/synapcores-installs-feed/github-downloads-v1.jsonl  public GitHub release counters (refresh unit, daily)
    │  read-only for mktperf-app (group), it can't write, replace or delete
    ▼

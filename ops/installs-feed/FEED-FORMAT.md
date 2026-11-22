@@ -17,12 +17,17 @@ directory, fsync, rename). `mktperf-app` can read them but can't create, replace
 
 Privacy rules (enforced by the writer, checked again by the app's importer):
 - No full IP addresses. Networks only: IPv4 `/24` written as three octets (`"203.0.113"`),
-  IPv6 `/48` written as `"2001:db8:1::/48"`.
+  IPv6 `/40` written as `"2001:db8:1200::/40"` (a /40 holds ~256 customer /48s, the same anonymity set as an
+  IPv4 /24; a /48 is often a single site). 6to4 addresses (`2002::/16`) carry a full IPv4 address in their first
+  48 bits, so they are written as that IPv4's /24.
 - No raw installation ids. Ids are `i_` / `p_` + 32 lowercase hex chars: HMAC-SHA256 with a
   salt that only the export job can read (`/etc/synapcores/installs-feed.salt`, root 0600,
   passed in with systemd `LoadCredential=`).
-- Free-text fields from telemetry (`deployment`, `os`, `arch`, `country`, versions) are
-  limited to 40 chars of `[A-Za-z0-9._+ -]`; anything else becomes `null`.
+- Fields copied from telemetry are attacker-writable (the ingest endpoint is public), so each has a strict
+  format and anything else becomes `null`: `country` = two capital letters; versions and `latest_release` =
+  `[v]N.N.N[-tag[.x]]`; `deployment`, `os`, `arch` = a letter followed by up to 23 of `[A-Za-z0-9_-]`. None of
+  these formats can spell an IP address. All of them also fit the app's general rule: at most 40 chars of
+  `[A-Za-z0-9._+ -]`.
 
 All timestamps are UTC, `YYYY-MM-DDTHH:MM:SSZ`. Dates are UTC `YYYY-MM-DD`.
 
@@ -65,7 +70,7 @@ Line 1 is the header; then every `installation` line; then every `person` line.
 | `events` | event counts by type (`other` = any unknown type) |
 | `version` / `first_version` | product_version of the last / first event that carried one |
 | `deployment`, `os`, `arch`, `country` | from the first event (os/arch normalized like tel8w.py: darwin→macos, arm64→aarch64, amd64→x86_64) |
-| `net` | /24 (or IPv6 /48) of the first event that carried an IP; `null` if none did |
+| `net` | /24 (or IPv6 /40) of the first event that carried an IP; `null` if none did, and always `null` for `internal`, `likely-internal` and `test` (our own networks never leave the host) |
 | `active_days` | UTC dates with any event, ascending, at most the last 400 |
 | `new_7d` / `active_7d` | `first_seen` / `last_seen` within 7 days before `generated_at` |
 

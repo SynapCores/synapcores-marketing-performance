@@ -193,7 +193,7 @@ class Feed(unittest.TestCase):
         self.assertEqual(e1["active_days"], ["2026-11-20", "2026-11-21"])
         self.assertTrue(e1["new_7d"] and e1["active_7d"])
         e6 = ext["2026-10-01T09:00:00Z"]
-        self.assertEqual(e6["net"], "2001:db8:1234::/48")
+        self.assertEqual(e6["net"], "2001:db8:1200::/40")
         self.assertEqual((e6["os"], e6["arch"]), ("macos", "aarch64"))
         self.assertFalse(e6["new_7d"] or e6["active_7d"])
         e2 = ext["2026-11-21T13:00:00Z"]
@@ -241,7 +241,8 @@ class Privacy(unittest.TestCase):
 
     def test_clean_file_passes(self):
         self.assertEqual(F.selfcheck_bytes(self.mk({})), [])
-        self.assertEqual(F.selfcheck_bytes(self.mk({"net": "2001:db8::/48"})), [])
+        self.assertEqual(F.selfcheck_bytes(self.mk({"net": "2001:db8::/40"})), [])
+        self.assertTrue(F.selfcheck_bytes(self.mk({"net": "2001:db8:1::/48"})))  # /48 is too specific
 
     def test_ipv4_anywhere_fails(self):
         self.assertTrue(F.selfcheck_bytes(self.mk({"os": "linux 100.80.1.2"})))
@@ -264,12 +265,22 @@ class Privacy(unittest.TestCase):
         self.assertIsNone(F.txt("x" * 41))
         self.assertIsNone(F.txt("a;b"))
         self.assertIsNone(F.txt("10.1.2.3"))
-        self.assertEqual(F.txt("2.5.1-ce"), "2.5.1-ce")
+        self.assertEqual(F.txt("2.5.1-ce", "version"), "2.5.1-ce")
+        self.assertEqual(F.txt("v2.5.1-ce", "version"), "v2.5.1-ce")
+        self.assertIsNone(F.txt("2.5.1-ce"))  # not a word
+        self.assertIsNone(F.txt("1.2.3.4", "version"))
+        self.assertIsNone(F.txt("192-168-1-1"))  # an IPv4 spelled with dashes is not a word
+        self.assertIsNone(F.txt("3232235777", "version"))  # nor as a number
+        self.assertEqual(F.txt("PL", "country"), "PL")
+        self.assertIsNone(F.txt("Poland", "country"))
+        self.assertEqual([F.txt(x) for x in ("bare-metal", "x86_64", "macos")], ["bare-metal", "x86_64", "macos"])
 
     def test_net_out(self):
         self.assertEqual(F.net_out("100.80.1"), "100.80.1")
-        self.assertEqual(F.net_out("2001:db8:1234:5678::/64"), "2001:db8:1234::/48")
-        self.assertEqual(F.net_out("2001:db8:0:5678::/64"), "2001:db8::/48")
+        self.assertEqual(F.net_out("2001:db8:1234:5678::/64"), "2001:db8:1200::/40")
+        self.assertEqual(F.net_out("2001:db8:0:5678::/64"), "2001:db8::/40")
+        # 6to4 embeds a full IPv4 in bits 16-47: written as that address's /24, never as an IPv6 prefix
+        self.assertEqual(F.net_out("2002:c000:0204:1::/64"), "192.0.2")
         self.assertIsNone(F.net_out("no-ip"))
         self.assertIsNone(F.net_out(""))
 

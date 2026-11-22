@@ -85,9 +85,18 @@ DEFAULT_TEST_IID = "00000000-0000-4000-8000-00000000c0de"  # ops-smoke
 DEFAULT_NIGHTLY = ("06:00", "07:30")  # recipe-cert cron 17 6 * * * -> engine events 06:26-06:58Z
 
 TEXT_OK = re.compile(r"[A-Za-z0-9._+ -]{1,40}")
+# Telemetry fields are attacker-writable (the ingest endpoint is public), so each one has a strict format; anything
+# else is dropped (None). None of these can spell an IP address (no 4 digit groups, no colons).
+FIELD_OK = {
+    "country": re.compile(r"[A-Z]{2}"),
+    "version": re.compile(r"v?[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:-[A-Za-z][A-Za-z0-9]{0,15}(?:\.[A-Za-z0-9]{1,16})?)?"),
+    "word": re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,23}"),  # deployment, os, arch: docker, bare-metal, linux, x86_64
+}
 IPV4_ANY = re.compile(r"(?<![0-9.])[0-9]{1,3}(?:\.[0-9]{1,3}){3}(?![0-9])")
 COLON_TOKEN = re.compile(r"[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*")
-NET_OK = re.compile(r"(?:[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,2}::/48)")
+V6_PREFIX = 40  # IPv6 networks are written as /40: ~256 customer /48s, the same anonymity set as an IPv4 /24
+NET_OK = re.compile(r"(?:[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,2}::/40)")
+SIX_TO_FOUR = ipaddress.ip_network("2002::/16")  # 6to4: bits 16-47 are a full IPv4 address
 NET24 = re.compile(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}")
 WATERMARK_OK = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.000")
 ARCHIVE_EXT = (".tar.gz", ".tgz", ".zip", ".deb", ".rpm", ".dmg", ".pkg", ".msi", ".exe")
@@ -139,23 +148,27 @@ def net_key(ip):
 
 
 def net_out(key):
-    """Clustering key -> the network written to the feed: IPv4 'a.b.c' (/24), IPv6 'x:y:z::/48'. None if none."""
+    """Clustering key -> the network written to the feed: IPv4 'a.b.c' (/24), IPv6 'x:y::/40'. None if none.
+    6to4 addresses (2002::/16) carry a full IPv4 address in their first 48 bits, so they become that IPv4's /24."""
     if not key or key == "no-ip":
         return None
     if ":" not in key:
         return key if NET24.fullmatch(key) else None
     n = ipaddress.ip_network(key, strict=False)
-    n = n.supernet(new_prefix=48) if n.prefixlen > 48 else n
-    out = f"{n.network_address.compressed}/48"
-    return out if NET_OK.fullmatch(out) else None
+    if n.subnet_of(SIX_TO_FOUR) and n.prefixlen >= 48:
+        v4 = ipaddress.IPv4Address(int(n.network_address) >> 80 & 0xFFFFFFFF)
+        return ".".join(str(v4).split(".")[:3])
+    n = n.supernet(new_prefix=V6_PREFIX) if n.prefixlen > V6_PREFIX else n
+    out = f"{n.network_address.compressed}/{V6_PREFIX}"
+    return out if n.prefixlen == V6_PREFIX and NET_OK.fullmatch(out) else None
 
 
-def txt(v):
-    """Telemetry free-text field -> short safe string or None."""
+def txt(v, kind="word"):
+    """Telemetry free-text field -> value in its strict format (FIELD_OK[kind]) or None."""
     if v is None:
         return None
     s = str(v).strip()
-    if not TEXT_OK.fullmatch(s) or IPV4_ANY.search(s):
+    if not FIELD_OK[kind].fullmatch(s) or not TEXT_OK.fullmatch(s) or IPV4_ANY.search(s):
         return None
     return s
 
@@ -379,9 +392,9 @@ def build_feed(rows, cfg, ranges, azure, salt, now, ranges_meta=None):
             pid_of[iid] = pid
         person_lines.append({
             "type": "person", "id": pid, "first_seen": iso(p["first"]), "last_seen": iso(p["last"]),
-            "installs": len(p["iids"]), "country": txt(p["country"]), "net": net_out(p["b"]),
+            "installs": len(p["iids"]), "country": txt(p["country"], "country"), "net": net_out(p["b"]),
             "deployment": txt(p["dep"]), "os": txt(p["os"]), "arch": txt(p["arch"]),
-            "first_version": txt(p["ver"]), "version": txt(p["latest_ver"]),
+            "first_version": txt(p["ver"], "version"), "version": txt(p["latest_ver"], "version"),
             "active_days": [d.isoformat() for d in p["days"]][-MAX_ACTIVE_DAYS:], "returned": p["returned"]})
     inst_lines, skipped = [], 0
     for iid, r in sorted(recs.items(), key=lambda kv: (kv[1]["first"], kv[0])):
@@ -398,8 +411,10 @@ def build_feed(rows, cfg, ranges, azure, salt, now, ranges_meta=None):
             "type": "installation", "id": "i_" + hid(salt, "installation", iid), "person": pid_of.get(iid),
             "class": cls, "reason": REASON_OUT[r["why"]], "first_seen": iso(r["first_seen"]),
             "last_seen": iso(r["last"]), "events": counts,
-            "version": txt(vers[-1] if vers else None), "first_version": txt(vers[0] if vers else None),
-            "deployment": txt(r["dep"]), "os": txt(r["os"]), "arch": txt(r["arch"]), "country": txt(r["country"]),
+            "version": txt(vers[-1] if vers else None, "version"),
+            "first_version": txt(vers[0] if vers else None, "version"),
+            "deployment": txt(r["dep"]), "os": txt(r["os"]), "arch": txt(r["arch"]),
+            "country": txt(r["country"], "country"),
             "net": None if cls in NO_NET_CLASSES else net_out(r["key"]),
             "active_days": sorted({ts(e["received_at"]).date().isoformat() for e in ev})[-MAX_ACTIVE_DAYS:],
             "new_7d": r["first_seen"] >= week, "active_7d": r["last"] >= week})
@@ -735,7 +750,7 @@ def make_snapshot(assets, fetched_at, latest_tag):
         plat[platform_of(n)] += c
     return {"type": "snapshot", "date": fetched_at.date().isoformat(), "fetched_at": iso(fetched_at),
             "archives": sum(c for _, _, c in arch), "all_assets": sum(c for _, _, c in assets),
-            "by_platform": dict(sorted(plat.items())), "latest_release": txt(latest_tag),
+            "by_platform": dict(sorted(plat.items())), "latest_release": txt(latest_tag, "version"),
             "latest_archives": sum(c for t, _, c in arch if t == latest_tag)}
 
 
