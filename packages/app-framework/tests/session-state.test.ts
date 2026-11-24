@@ -4,7 +4,13 @@ import { SESSION_LOOKUP_FAILED, SessionUnavailableError, frameworkSessionOf } fr
 import { ENGINE_UNAVAILABLE_DIGEST, isEngineUnavailableDigest } from '../src/db/unavailable';
 import type { Session } from '../src/auth/types';
 
-const session = { user: { id: 'u1' }, tenant: null, role: null, permissions: [], memberships: [] } as unknown as Session;
+const session = {
+  user: { id: 'u1', email: 'u1@example.com', name: null, emailVerified: true, createdAt: '2026-11-01T00:00:00Z' },
+  tenant: null,
+  role: null,
+  permissions: [],
+  memberships: [],
+} as unknown as Session;
 
 test('frameworkSessionOf: no session vs a session vs a failed lookup', () => {
   assert.equal(frameworkSessionOf(null), null, 'signed out: Auth.js returns null');
@@ -36,9 +42,10 @@ test('attachFrameworkSession: attaches the session, or flags a failed lookup wit
 
   const ok: { framework?: Session | null; frameworkError?: string } = {};
   await attachFrameworkSession(ok, async () => session, warn);
-  assert.equal(ok.framework, session);
+  // An allow-listed copy (see publicFrameworkSession), equal in content.
+  assert.deepEqual(ok.framework, session);
   assert.equal(ok.frameworkError, undefined);
-  assert.equal(frameworkSessionOf(ok), session);
+  assert.deepEqual(frameworkSessionOf(ok), session);
 
   const gone: { framework?: Session | null; frameworkError?: string } = {};
   await attachFrameworkSession(gone, async () => null, warn);

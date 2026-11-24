@@ -46,7 +46,8 @@ export async function GET(request: Request): Promise<Response> {
   );
   const offset = Math.max(parseInt(url.searchParams.get('offset') ?? '0', 10) || 0, 0);
 
-  const db = getClientForSession(session);
+  // Tenant-scoped client; its key is read server-side by tenant id.
+  const db = await getClientForSession(session);
   const result = await db.sql(
     `SELECT event_id, ts, actor_id, actor_type, action, target_id, payload
        FROM framework_audit_log

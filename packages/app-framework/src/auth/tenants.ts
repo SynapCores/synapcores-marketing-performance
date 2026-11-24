@@ -7,16 +7,19 @@
  * The framework writes the tenant row + the owner membership; mints a
  * per-tenant API key the framework will use when scoping DB calls
  * (see ../db/server.ts:getClientForSession). The plaintext key is
- * stored in FRAMEWORK_TENANT_KEYS_DIR (file fallback). Production
- * deployments should swap that for a real secret manager — the
- * function signatures don't change.
+ * stored in FRAMEWORK_TENANT_KEYS_DIR (file fallback, read back by
+ * ./tenant-keys.ts) and is never returned to callers or put on the
+ * session. Production deployments should swap that for a real secret
+ * manager — the function signatures don't change.
  *
- * Multi-tenancy model (Phase 2): one SynapCores instance, framework
- * filters queries by tenant_id. The per-tenant API key is the same as
- * the admin key for now (the framework + apps add `WHERE tenant_id = $`
- * everywhere). Phase 8 upgrades this to true per-tenant SynapCores
- * tenants when the customer-data-isolation contract becomes load-
- * bearing for enterprise.
+ * Multi-tenancy model (Phase 2): one SynapCores instance; app queries
+ * run on the admin client and filter by tenant_id (the framework + apps
+ * add `WHERE tenant_id = $` everywhere). Each tenant gets its own random
+ * key (mintApiKey below), stored hashed in `tenants` and in plaintext only
+ * in the server-side key store. It is not registered with the engine yet.
+ * Never put the engine admin key in a tenant key file. Phase 8 upgrades
+ * this to true per-tenant SynapCores tenants when the customer-data-
+ * isolation contract becomes load-bearing for enterprise.
  */
 
 import 'server-only';
@@ -26,6 +29,7 @@ import { join } from 'node:path';
 import bcrypt from 'bcryptjs';
 
 import { getAdminClient } from '../db/server';
+import { tenantKeysDir } from './tenant-keys';
 import { ValidationError } from './users';
 import type { TenantInfo } from './types';
 import type { Role } from '../rbac/types';
@@ -39,6 +43,7 @@ export interface CreateTenantInput {
   ownerUserId: string;
 }
 
+/** Returns the new tenant without its API key (persisted server-side only). */
 export async function createTenant(input: CreateTenantInput): Promise<TenantInfo> {
   const name = input.name.trim();
   if (name.length < 2) {
@@ -93,7 +98,7 @@ export async function createTenant(input: CreateTenantInput): Promise<TenantInfo
     payload: { slug, name },
   });
 
-  return { id, name, slug, apiKey };
+  return { id, name, slug };
 }
 
 /**
@@ -168,7 +173,7 @@ function mintApiKey(): string {
 }
 
 async function persistTenantApiKey(tenantId: string, apiKey: string): Promise<void> {
-  const dir = process.env.FRAMEWORK_TENANT_KEYS_DIR ?? './var/tenant-keys';
+  const dir = tenantKeysDir();
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${tenantId}.key`), apiKey, { mode: 0o600 });
 }

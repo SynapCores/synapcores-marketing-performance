@@ -21,6 +21,8 @@
     "src/db/retry.ts",
     "src/db/unavailable.ts",
     "src/db/client.ts",
-    "src/auth/session-state.ts"
+    "src/db/server.ts",
+    "src/auth/session-state.ts",
+    "src/auth/tenant-keys.ts"
   ]
 }

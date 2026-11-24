@@ -8,6 +8,13 @@
 
 import type { Role, Permission } from '../rbac/types';
 
+/**
+ * The tenant as the session carries it. Deliberately no API key: the
+ * per-tenant SynapCores key never travels in the session (not in the Auth.js
+ * cookie, not in GET /api/auth/session, not in RSC payloads). Server code that
+ * needs it gets a tenant-scoped client from `getClientForSession()` in
+ * ../db/server.ts, which reads the key by tenant id (store: ./tenant-keys.ts).
+ */
 export interface TenantInfo {
   /** Internal id (uuid). Stable across renames. */
   id: string;
@@ -15,11 +22,6 @@ export interface TenantInfo {
   name: string;
   /** URL-safe slug, e.g. "acme-bank". */
   slug: string;
-  /**
-   * SynapCores per-tenant API key the framework uses to scope DB calls.
-   * We mint this on tenant creation. NEVER expose this to the browser.
-   */
-  apiKey: string;
 }
 
 export interface UserInfo {

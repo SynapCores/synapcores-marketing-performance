@@ -9,6 +9,10 @@
  * SynapCores ONLY for the "log out everywhere" + "list my devices"
  * + audit-log surfaces. The JWT itself carries the userId; we
  * resolve tenant + role per-request from the DB.
+ *
+ * Neither the JWT nor the session output carries the tenant's
+ * SynapCores API key: server code looks it up by tenant id
+ * (../db/server.ts getClientForSession).
  */
 
 import 'server-only';
@@ -21,7 +25,8 @@ import { z } from 'zod';
 import { getAdminClient } from '../db/server';
 import { DEFAULT_ROLE_GRANTS, type Role } from '../rbac/types';
 import { redeemAuthToken } from './users';
-import { attachFrameworkSession } from './session-state';
+import { frameworkJwtCallback, frameworkSessionCallback } from './session-state';
+import { hasTenantApiKey } from './tenant-keys';
 import type {
   Session as FrameworkSession,
   TenantInfo,
@@ -116,27 +121,20 @@ export function createAuth(
     ],
     callbacks: {
       async jwt({ token, user }) {
-        if (user) {
-          token.userId = user.id;
-        }
-        return token;
+        // The cookie holds the user id only; key-bearing fields a token may
+        // carry from older code are dropped on every read.
+        return frameworkJwtCallback(token, user);
       },
       async session({ session, token }) {
         // Stuff our framework session shape onto the Auth.js session
         // object. App code reads `session.framework` through
-        // frameworkSessionOf() (./session-state.ts).
-        if (typeof token.userId === 'string') {
-          // A failed lookup (engine restarting / unreachable) is not "signed
-          // out". Throwing here would make Auth.js return no session (→ /login)
-          // and clear the cookie, so it is flagged instead; readers throw
-          // SessionUnavailableError and the page shows "Reconnecting…".
-          const userId = token.userId;
-          await attachFrameworkSession(
-            session as unknown as { framework?: FrameworkSession | null; frameworkError?: string },
-            () => resolveFrameworkSession(userId),
-          );
-        }
-        return session;
+        // frameworkSessionOf() (./session-state.ts). The framework session
+        // is allow-listed on the way out: no tenant API key.
+        // A failed lookup (engine restarting / unreachable) is not "signed
+        // out". Throwing here would make Auth.js return no session (→ /login)
+        // and clear the cookie, so it is flagged instead; readers throw
+        // SessionUnavailableError and the page shows "Reconnecting…".
+        return frameworkSessionCallback(session, token, resolveFrameworkSession);
       },
       ...extraConfig.callbacks,
     },
@@ -267,37 +265,28 @@ async function resolveFrameworkSession(
       id: string;
       name: string;
       slug: string;
-      api_key_prefix: string;
     }>(
-      `SELECT id, name, slug, api_key_prefix
+      `SELECT id, name, slug
          FROM tenants WHERE id = $1 LIMIT 1`,
       [m.tenant_id],
     );
     const t = tenantResult.rows[0];
     if (!t) continue;
     memberships.push({
-      tenant: {
-        id: t.id,
-        name: t.name,
-        slug: t.slug,
-        apiKey: '', // not exposed in session shape — fetched separately for DB calls
-      },
+      tenant: { id: t.id, name: t.name, slug: t.slug },
       role: m.role as Role,
     });
   }
 
   const active = memberships[0] ?? null;
 
-  // Resolve API key for the active tenant from the framework's
-  // file-backed secret store. (Production deployments swap this for
-  // AWS Secrets Manager / GCP Secret Manager / Vault — see
-  // readTenantApiKey below.)
+  // The active tenant needs a provisioned SynapCores API key (same rule as
+  // before), but the key itself stays server-side: it is not put on the
+  // session. Code that queries with it reads it by tenant id
+  // (../db/server.ts getClientForSession, store in ./tenant-keys.ts).
   let activeTenant: TenantInfo | null = null;
-  if (active) {
-    const plaintext = await readTenantApiKey(active.tenant.id);
-    if (plaintext) {
-      activeTenant = { ...active.tenant, apiKey: plaintext };
-    }
+  if (active && (await hasTenantApiKey(active.tenant.id))) {
+    activeTenant = active.tenant;
   }
 
   const role = active?.role ?? null;
@@ -318,26 +307,6 @@ async function resolveFrameworkSession(
     permissions,
     memberships,
   };
-}
-
-/**
- * Read the plaintext tenant API key from the framework's secret store.
- *
- * Phase 1: local file at $FRAMEWORK_TENANT_KEYS_DIR/<tenant_id>.key.
- * Set FRAMEWORK_TENANT_KEYS_DIR (defaults to ./var/tenant-keys).
- *
- * Production swap-in: AWS Secrets Manager / GCP Secret Manager / Vault.
- */
-async function readTenantApiKey(tenantId: string): Promise<string | null> {
-  try {
-    const { readFile } = await import('node:fs/promises');
-    const { join } = await import('node:path');
-    const dir = process.env.FRAMEWORK_TENANT_KEYS_DIR ?? './var/tenant-keys';
-    const key = await readFile(join(dir, `${tenantId}.key`), 'utf-8');
-    return key.trim();
-  } catch {
-    return null;
-  }
 }
 
 // ─── login throttling (per process) ──────────────────────────────────────
