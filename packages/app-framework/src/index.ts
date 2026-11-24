@@ -36,6 +36,8 @@ export type {
 export {
   DashboardLayout,
   Sidebar,
+  SidebarNav,
+  MobileNav,
   FRAMEWORK_SIDEBAR_SECTION,
   SidebarIcons,
   TopBar,

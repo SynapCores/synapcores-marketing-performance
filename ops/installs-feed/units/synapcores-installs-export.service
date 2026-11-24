@@ -1,0 +1,54 @@
+# SynapCores installs feed: export (every 15 min via synapcores-installs-export.timer).
+# Reads telemetry_events on the local telemetry engine, writes the sanitized installs-v1.jsonl drop file.
+# Runs as the telemetry-ingest user (bitnami), which can already read the telemetry key; NoNewPrivileges +
+# an empty capability set mean it can't use that account's sudo. Network: localhost only.
+# The mktperf key is out of reach: /etc/mktperf/app.env is root 0600 and InaccessiblePaths below.
+[Unit]
+Description=SynapCores installs feed export (telemetry_events -> sanitized drop file for mktperf)
+Documentation=file:///opt/synapcores-installs-feed/README.md
+After=network-online.target synapcores.service
+Wants=network-online.target
+ConditionPathIsDirectory=/var/lib/synapcores-installs-feed
+
+[Service]
+Type=oneshot
+User=bitnami
+Group=bitnami
+UMask=0027
+ExecStart=/usr/bin/python3 -I /opt/synapcores-installs-feed/synapcores_installs_feed.py export
+LoadCredential=telemetry-apikey:/etc/synapcores/telemetry-ingest.apikey
+LoadCredential=feed-salt:/etc/synapcores/installs-feed.salt
+LoadCredential=feed-config:/etc/synapcores/installs-feed.json
+StateDirectory=synapcores-installs-export
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/synapcores-installs-feed
+InaccessiblePaths=-/etc/mktperf -/var/lib/mktperf-app -/opt/mktperf -/opt/telemetry-ingest
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+MemoryMax=256M
+CPUQuota=50%
+Nice=10
+TimeoutStartSec=5min

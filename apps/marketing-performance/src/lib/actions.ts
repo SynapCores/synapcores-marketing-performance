@@ -1,6 +1,7 @@
 'use server';
 import { revalidatePath } from 'next/cache';
 import { requireSession } from './session';
+import { assertCanWrite } from './security';
 import { loadSampleData, rebuildDerived, ingestRows, clearAll, recommend } from './warehouse';
 
 export async function recommendAction() {
@@ -11,21 +12,21 @@ import { SOURCES, mapRows } from './sources';
 import { getAdminClient } from '@synapcores/app-framework/db/server';
 
 export async function loadSampleAction() {
-  await requireSession();
+  assertCanWrite(await requireSession());
   await loadSampleData();
   revalidatePath('/dashboard'); revalidatePath('/tables'); revalidatePath('/campaigns');
   return { ok: true };
 }
 
 export async function rebuildAction() {
-  await requireSession();
+  assertCanWrite(await requireSession());
   await rebuildDerived();
   revalidatePath('/dashboard'); revalidatePath('/attribution'); revalidatePath('/campaigns');
   return { ok: true };
 }
 
 export async function clearAction() {
-  await requireSession();
+  assertCanWrite(await requireSession());
   await clearAll();
   revalidatePath('/dashboard'); revalidatePath('/tables');
   return { ok: true };
@@ -33,7 +34,8 @@ export async function clearAction() {
 
 /** Parse a CSV string (header row → keys) into source records and ingest them. */
 export async function ingestCsvAction(source: string, csv: string) {
-  await requireSession();
+  assertCanWrite(await requireSession());
+  if (typeof csv !== 'string' || csv.length > 5_000_000) return { ok: false, error: 'CSV too large (5 MB max per upload).' };
   const def = SOURCES[source];
   if (!def) return { ok: false, error: `Unknown source '${source}'` };
   const rows = parseCsv(csv);

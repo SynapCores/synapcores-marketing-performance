@@ -8,8 +8,8 @@ export const dynamic = 'force-dynamic';
 const groups = ['Platform', 'First-party', 'Derived'];
 
 export default async function TablesPage() {
-  await requireSession();
-  const tables = await listTables();
+  const session = await requireSession();
+  const tables = await listTables(session.tenant?.id);
 
   return (
     <div className="space-y-6">
@@ -19,7 +19,7 @@ export default async function TablesPage() {
           <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">{g}</h3>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             {tables.filter((t) => t.meta?.group === g).map((t) => (
-              <Link key={t.table} href={`/tables/${t.table}`}>
+              <Link key={t.table} href={`/tables/${t.table}`} prefetch={false}>
                 <Card className="h-full transition hover:border-primary">
                   <CardContent className="pt-5">
                     <div className="flex items-baseline justify-between">

@@ -1,0 +1,12 @@
+[Unit]
+Description=SynapCores installs feed export every 15 minutes
+
+[Timer]
+OnBootSec=3min
+OnCalendar=*:02/15
+RandomizedDelaySec=60
+AccuracySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

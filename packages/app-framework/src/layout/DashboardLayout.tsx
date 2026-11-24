@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Sidebar, type SidebarSection } from './Sidebar';
 import { TopBar } from './TopBar';
+import { MobileNav } from './MobileNav';
 
 /**
  * The framework's standard authenticated layout. Apps wrap their
@@ -34,7 +35,7 @@ export function DashboardLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
+    <div className="flex min-h-screen supports-[min-height:100dvh]:min-h-dvh bg-background text-foreground">
       <Sidebar sections={sidebar} brand={brand} />
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar
@@ -43,6 +44,7 @@ export function DashboardLayout({
           userEmail={session.user.email}
           signOutAction={signOutAction}
           right={topBarRight}
+          left={<MobileNav sections={sidebar} brand={brand} />}
         />
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>

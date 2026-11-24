@@ -1,13 +1,19 @@
 import 'server-only';
 import { getAdminClient } from '@synapcores/app-framework/db/server';
+import { invalidateReports, reportDb } from './report-db';
 import { SCHEMA, TABLES, SEED, ATTRIBUTION, SCORECARD, QUERIES, AGENT_TASK } from './recipe-sql';
 import { SOURCES, mapRows } from './sources';
+import { rebuildDerivedWith, runExclusive, runShared, type WriterQueue } from './derived-rebuild';
 
 /**
  * The performance-marketing warehouse — recipe 121 as a first-class data layer.
  * Platform ad spend, first-party clickstream, identity, conversions, orders and
  * the ad creative (as 384-dim embeddings) all live in SynapCores. Attribution
  * and the 90-day LTV scorecard are derived with live SQL.
+ *
+ * The recipe tables are shared by every workspace, so any write here clears the
+ * whole report cache (invalidateReports() with no tenant). Reads take the
+ * viewer's tenant id only to key the cache (see report-db.ts).
  */
 
 const db = () => getAdminClient();
@@ -19,61 +25,155 @@ export const TABLE_META: Record<string, { label: string; group: string; desc: st
   recipe_pm_creative:          { label: 'Creative',        group: 'Platform',    desc: 'Ad headline + body copy, embedded as a 384-dim angle vector', source: 'Ad accounts' },
   recipe_pm_click_events:      { label: 'Click Events',    group: 'First-party', desc: 'Your own landing hits with UTMs + click IDs (fbclid/ttclid/gclid)', source: 'Web analytics' },
   recipe_pm_identity:          { label: 'Identity',        group: 'First-party', desc: 'Anonymous browser → known customer resolution', source: 'CDP / identity graph' },
-  recipe_pm_conversions:       { label: 'Conversions',     group: 'First-party', desc: 'First-purchase events with revenue', source: 'Checkout' },
+  recipe_pm_conversions:       { label: 'Conversions',     group: 'First-party', desc: 'Purchases (with revenue), leads and sign-ups — event_name first_purchase | lead | signup', source: 'Checkout' },
   recipe_pm_orders:            { label: 'Orders',          group: 'First-party', desc: 'Full order history incl. the repeats ad platforms never see', source: 'Orders DB' },
   recipe_pm_attribution:       { label: 'Attribution',     group: 'Derived',     desc: 'Last-touch attribution ledger (computed)', source: 'Derived · Step 7' },
   recipe_pm_campaign_scorecard:{ label: 'Campaign Scorecard', group: 'Derived',  desc: 'Day-0 + 90-day LTV scorecard (computed)', source: 'Derived · Step 10' },
 };
 
 // ── lifecycle ───────────────────────────────────────────────────────────────
-export async function ensureSchema() { for (const ddl of SCHEMA) await run(ddl); }
-
-export async function clearAll() {
-  for (const t of TABLES) { try { await run(`DROP TABLE IF EXISTS ${t}`); } catch { /* ignore */ } }
+// The recipe tables are created once per process. The collector calls
+// ingestSource() on every beacon, and running the 8 CREATE TABLE IF NOT EXISTS
+// each time (twice per call) was 16 of a pageview beacon's 21 engine
+// statements. Dropping tables or a failed insert makes the next caller run the
+// DDL again. The state lives on globalThis so a clearAll() from a server action
+// also resets it for the collector route (separate module instances).
+const SCHEMA_STATE = Symbol.for('synapcores.marketing-performance.warehouse-schema');
+function schemaState(): { ready: Promise<void> | null } {
+  const g = globalThis as unknown as Record<symbol, { ready: Promise<void> | null } | undefined>;
+  let s = g[SCHEMA_STATE];
+  if (!s) {
+    s = { ready: null };
+    g[SCHEMA_STATE] = s;
+  }
+  return s;
 }
 
-/** Recompute attribution + scorecard from the base tables (Steps 7 & 10). */
-export async function rebuildDerived() {
-  await run(`DROP TABLE IF EXISTS recipe_pm_attribution`);
-  await run(`DROP TABLE IF EXISTS recipe_pm_campaign_scorecard`);
-  await ensureSchema();
-  await run(ATTRIBUTION);
-  await run(SCORECARD);
+export function ensureSchema(): Promise<void> {
+  const s = schemaState();
+  if (!s.ready) {
+    const p = (async () => { for (const ddl of SCHEMA) await run(ddl); })();
+    s.ready = p;
+    p.catch(() => { if (s.ready === p) s.ready = null; });
+  }
+  return s.ready;
+}
+
+/** Tables were (or may have been) dropped: the next ensureSchema() recreates them. */
+function schemaChanged(): void {
+  schemaState().ready = null;
+}
+
+// ── derived tables ──────────────────────────────────────────────────────────
+// Attribution + scorecard are rebuilt by the collector's timer, after every
+// ingest API call and CSV upload, and from the Rebuild button, so rebuilds can
+// overlap. loadSampleData() and clearAll() write the same tables. All of them
+// run one at a time through one queue, so within this process their DROP /
+// DELETE / INSERT statements never interleave; rebuild callers share a rebuild
+// that hasn't started yet. Not covered: other app processes on the same engine,
+// and a statement the client gave up on (request timeout) that is still running
+// on the engine. The queue lives on globalThis like the schema state, so route
+// handlers and server actions share it. `recreated`: this process has dropped
+// and re-created the derived tables; later rebuilds DELETE instead (see
+// derived-rebuild.ts).
+const DERIVED_STATE = Symbol.for('synapcores.marketing-performance.warehouse-derived');
+type DerivedState = WriterQueue & { recreated: boolean };
+function derivedState(): DerivedState {
+  const g = globalThis as unknown as Record<symbol, DerivedState | undefined>;
+  let s = g[DERIVED_STATE];
+  if (!s) {
+    s = { recreated: false, tail: Promise.resolve(), pending: null };
+    g[DERIVED_STATE] = s;
+  }
+  return s;
+}
+
+export function clearAll(): Promise<void> {
+  return runExclusive(derivedState(), clearAllNow);
+}
+
+async function clearAllNow() {
+  try {
+    for (const t of TABLES) { try { await run(`DROP TABLE IF EXISTS ${t}`); } catch { /* ignore */ } }
+  } finally {
+    schemaChanged();
+    invalidateReports();
+  }
+}
+
+/**
+ * Recompute attribution + scorecard from the base tables (Steps 7 & 10). The
+ * first rebuild in a process drops and re-creates both tables; later ones
+ * DELETE their rows, and fall back to the DROP path for that run if a DELETE
+ * fails (e.g. a table was dropped outside the app).
+ */
+export function rebuildDerived(): Promise<void> {
+  const s = derivedState();
+  return runShared(s, () => rebuildDerivedWith(s, {
+    run,
+    ensureSchema,
+    schemaChanged,
+    invalidateReports: () => invalidateReports(),
+    warn: (message) => console.warn(message),
+    attribution: ATTRIBUTION,
+    scorecard: SCORECARD,
+  }));
 }
 
 /** One-click: wipe, recreate, seed the recipe-121 sample dataset, rebuild derived. */
-export async function loadSampleData() {
-  await clearAll();
-  await ensureSchema();
-  for (const stmt of SEED) await run(stmt);
-  await run(ATTRIBUTION);
-  await run(SCORECARD);
+export function loadSampleData(): Promise<void> {
+  return runExclusive(derivedState(), async () => {
+    try {
+      await clearAllNow(); // not clearAll(): that would queue behind this task
+      // Leaves `recreated` as it is: clearAllNow() ignores DROP errors, so a
+      // derived table from before this process could survive with older DDL.
+      await ensureSchema();
+      for (const stmt of SEED) await run(stmt);
+      await run(ATTRIBUTION);
+      await run(SCORECARD);
+    } finally {
+      invalidateReports();
+    }
+  });
 }
 
 // ── ingestion ────────────────────────────────────────────────────────────────
-/** Insert parsed rows (array of objects) into a warehouse table. Chunked. */
-export async function ingestRows(table: string, columns: string[], rows: unknown[][]) {
+/**
+ * Insert parsed rows (array of objects) into a warehouse table. Chunked.
+ * Clears the report cache afterwards unless `invalidate` is false (the pixel
+ * collector: its rows show up within the cache TTL).
+ */
+export async function ingestRows(table: string, columns: string[], rows: unknown[][], opts: { invalidate?: boolean } = {}) {
   if (!rows.length) return 0;
-  await ensureSchema();
-  const chunk = 200;
-  let n = 0;
-  for (let i = 0; i < rows.length; i += chunk) {
-    const slice = rows.slice(i, i + chunk);
-    const values = slice.map((r) => '(' + r.map((v) => sqlLit(v)).join(',') + ')').join(',');
-    await run(`INSERT INTO ${table} (${columns.join(',')}) VALUES ${values}`);
-    n += slice.length;
+  try {
+    await ensureSchema();
+    const chunk = 200;
+    let n = 0;
+    for (let i = 0; i < rows.length; i += chunk) {
+      const slice = rows.slice(i, i + chunk);
+      const values = slice.map((r) => '(' + r.map((v) => sqlLit(v)).join(',') + ')').join(',');
+      await run(`INSERT INTO ${table} (${columns.join(',')}) VALUES ${values}`);
+      n += slice.length;
+    }
+    // creative embeddings are populated on ingest
+    if (table === 'recipe_pm_creative') {
+      await run(`UPDATE recipe_pm_creative SET angle = EMBED(headline || ' ' || body_copy) WHERE angle IS NULL`);
+    }
+    return n;
+  } catch (e) {
+    schemaChanged(); // e.g. a table dropped outside the app: recreate it on the next call
+    throw e;
+  } finally {
+    if (opts.invalidate !== false) invalidateReports();
   }
-  // creative embeddings are populated on ingest
-  if (table === 'recipe_pm_creative') {
-    await run(`UPDATE recipe_pm_creative SET angle = EMBED(headline || ' ' || body_copy) WHERE angle IS NULL`);
-  }
-  return n;
 }
 
 /**
  * Ingest an array of source-shaped objects into a named source's warehouse
  * table, auto-numbering the primary key from the current max so callers may
- * omit it. Shared by the ETL REST route and the first-party beacon collector.
+ * omit it. Used by the first-party beacon collector, so it doesn't clear the
+ * report cache (beacon data shows up within the cache TTL; the coalesced
+ * rebuildDerived() that follows does clear it).
  * Returns the number of rows written (0 for an empty or unknown source).
  */
 export async function ingestSource(sourceId: string, records: Array<Record<string, unknown>>): Promise<number> {
@@ -86,7 +186,7 @@ export async function ingestSource(sourceId: string, records: Array<Record<strin
     if (typeof max === 'number') startId = max + 1;
   } catch { /* text-keyed tables ignore startId */ }
   const rows = mapRows(def, records, startId);
-  return ingestRows(def.table, def.columns, rows);
+  return ingestRows(def.table, def.columns, rows, { invalidate: false });
 }
 
 function sqlLit(v: unknown): string {
@@ -100,26 +200,30 @@ function sqlLit(v: unknown): string {
 export type Row = Record<string, unknown>;
 
 type TableMetaEntry = (typeof TABLE_META)[string] | undefined;
-export async function listTables(): Promise<Array<{ table: string; count: number; meta: TableMetaEntry }>> {
+type TenantId = string | null | undefined;
+
+export async function listTables(tenantId: TenantId): Promise<Array<{ table: string; count: number; meta: TableMetaEntry }>> {
+  const rdb = reportDb(tenantId);
   const out: Array<{ table: string; count: number; meta: TableMetaEntry }> = [];
   for (const t of TABLES) {
     let count = 0;
-    try { count = Number((await db().sqlScalar<number>(`SELECT COUNT(*) FROM ${t}`)) ?? 0); }
+    try { count = Number((await rdb.sqlScalar<number>(`SELECT COUNT(*) FROM ${t}`)) ?? 0); }
     catch { count = -1; } // table not created yet
     out.push({ table: t, count, meta: TABLE_META[t] });
   }
   return out;
 }
 
-export async function tableRows(table: string, limit = 200): Promise<{ columns: string[]; rows: Row[] }> {
+export async function tableRows(tenantId: TenantId, table: string, limit = 200): Promise<{ columns: string[]; rows: Row[] }> {
   if (!TABLES.includes(table)) throw new Error('unknown table');
-  const res = await db().sql<Row>(`SELECT * FROM ${table} LIMIT ${limit}`);
+  const res = await reportDb(tenantId).sql<Row>(`SELECT * FROM ${table} LIMIT ${limit}`);
   return { columns: res.columns, rows: res.rows };
 }
 
-export async function kpis() {
-  const k = (await db().sql<Row>(QUERIES.kpis)).rows[0] ?? {};
-  const sc = (await db().sql<Row>(QUERIES.scorecard)).rows;
+export async function kpis(tenantId: TenantId) {
+  const rdb = reportDb(tenantId);
+  const k = (await rdb.sql<Row>(QUERIES.kpis)).rows[0] ?? {};
+  const sc = (await rdb.sql<Row>(QUERIES.scorecard)).rows;
   const platforms = new Set(sc.map((r) => r.platform)).size;
   const total = Number(k.total_spend ?? 0), cust = Number(k.new_customers ?? 0);
   return {
@@ -131,10 +235,11 @@ export async function kpis() {
   };
 }
 
-export const scorecard = async () => (await db().sql<Row>(QUERIES.scorecard)).rows;
-export const clickTruth = async () => (await db().sql<Row>(QUERIES.clickTruth)).rows;
-export const creativeAngle = async () => (await db().sql<Row>(QUERIES.creativeAngle)).rows;
-export const attribution = async () => (await db().sql<Row>(QUERIES.attribution)).rows;
+// Without a tenant id (the recommendation fallback) these run uncached.
+export const scorecard = async (tenantId?: TenantId) => (await reportDb(tenantId).sql<Row>(QUERIES.scorecard)).rows;
+export const clickTruth = async (tenantId: TenantId) => (await reportDb(tenantId).sql<Row>(QUERIES.clickTruth)).rows;
+export const creativeAngle = async (tenantId: TenantId) => (await reportDb(tenantId).sql<Row>(QUERIES.creativeAngle)).rows;
+export const attribution = async (tenantId: TenantId) => (await reportDb(tenantId).sql<Row>(QUERIES.attribution)).rows;
 
 /** Step 12 — AGENT_RUN budget recommendation, with a deterministic fallback. */
 export async function recommend(): Promise<{ source: 'agent_run' | 'fallback'; text: string; tookMs: number; reason?: string }> {

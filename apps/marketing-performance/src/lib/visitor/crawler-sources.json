@@ -1,0 +1,19 @@
+{
+  "_comment": "Published crawler IP lists used to verify bot claims and to catch crawlers that use a normal browser UA. Each list is {prefixes:[{ipv4Prefix|ipv6Prefix}]}. Used by src/lib/visitor/crawler-ranges*.ts and bin/update-crawler-ranges.mjs (regenerates the bundled fallback).",
+  "sources": [
+    { "id": "google-common", "operator": "google", "label": "Googlebot", "category": "search", "url": "https://developers.google.com/static/search/apis/ipranges/googlebot.json" },
+    { "id": "google-special", "operator": "google", "label": "Google special crawler", "category": "search", "url": "https://developers.google.com/static/search/apis/ipranges/special-crawlers.json" },
+    { "id": "google-user-triggered", "operator": "google", "label": "Google user-triggered fetcher", "category": "other", "url": "https://developers.google.com/static/search/apis/ipranges/user-triggered-fetchers.json" },
+    { "id": "google-user-triggered-google", "operator": "google", "label": "Google user-triggered fetcher", "category": "other", "url": "https://developers.google.com/static/search/apis/ipranges/user-triggered-fetchers-google.json" },
+    { "id": "bing", "operator": "bing", "label": "Bingbot", "category": "search", "url": "https://www.bing.com/toolbox/bingbot.json" },
+    { "id": "openai-gptbot", "operator": "openai", "label": "GPTBot (OpenAI)", "category": "ai", "url": "https://openai.com/gptbot.json" },
+    { "id": "openai-searchbot", "operator": "openai", "label": "OAI-SearchBot (OpenAI)", "category": "ai", "url": "https://openai.com/searchbot.json" },
+    { "id": "openai-chatgpt-user", "operator": "openai", "label": "ChatGPT-User (OpenAI)", "category": "ai", "url": "https://openai.com/chatgpt-user.json" },
+    { "id": "anthropic", "operator": "anthropic", "label": "Claude crawler (Anthropic)", "category": "ai", "url": "https://claude.com/crawling/bots.json" },
+    { "id": "perplexity-bot", "operator": "perplexity", "label": "PerplexityBot", "category": "ai", "url": "https://www.perplexity.com/perplexitybot.json" },
+    { "id": "perplexity-user", "operator": "perplexity", "label": "Perplexity-User", "category": "ai", "url": "https://www.perplexity.com/perplexity-user.json" },
+    { "id": "apple", "operator": "apple", "label": "Applebot", "category": "search", "url": "https://search.developer.apple.com/applebot.json" },
+    { "id": "duckduckgo", "operator": "duckduckgo", "label": "DuckDuckBot", "category": "search", "url": "https://duckduckgo.com/duckduckbot.json" },
+    { "id": "commoncrawl", "operator": "commoncrawl", "label": "CCBot (Common Crawl)", "category": "ai", "url": "https://index.commoncrawl.org/ccbot.json" }
+  ]
+}

@@ -64,10 +64,11 @@ export async function listApiKeys(
   return result.rows;
 }
 
-export async function revokeApiKey(id: string): Promise<void> {
+export async function revokeApiKey(id: string, tenantId: string): Promise<void> {
   const db = getAdminClient();
+  // Tenant-scoped so a member of one workspace can never revoke another's key.
   await db.sql(
-    `UPDATE api_keys SET revoked_at = NOW() WHERE id = $1`,
-    [id],
+    `UPDATE api_keys SET revoked_at = NOW() WHERE id = $1 AND tenant_id = $2`,
+    [id, tenantId],
   );
 }

@@ -1,0 +1,11 @@
+[Unit]
+Description=SynapCores installs feed refresh once a day
+
+[Timer]
+OnCalendar=*-*-* 06:40:00 UTC
+OnBootSec=10min
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

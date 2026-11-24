@@ -12,6 +12,7 @@ import {
 } from '@synapcores/app-framework';
 import { Scale } from 'lucide-react';
 import { signIn } from '@/lib/auth';
+import { authErrorMessage } from '@/lib/auth-errors';
 import { getSession } from '@/lib/session';
 import { requestMagicLink } from '@/app/login/actions';
 
@@ -30,7 +31,13 @@ export default async function LoginPage({
     'use server';
     const email = String(formData.get('email') ?? '');
     const password = String(formData.get('password') ?? '');
-    await signIn('credentials', { email, password, redirectTo: '/' });
+    try {
+      await signIn('credentials', { email, password, redirectTo: '/' });
+    } catch (err) {
+      const msg = authErrorMessage(err);
+      if (!msg) throw err;
+      redirect(`/login?error=${encodeURIComponent(msg)}`);
+    }
   }
 
   async function magicLinkLogin(formData: FormData): Promise<void> {

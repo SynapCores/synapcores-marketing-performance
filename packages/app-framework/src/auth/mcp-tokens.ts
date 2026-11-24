@@ -88,10 +88,10 @@ export async function listMcpTokens(tenantId: string): Promise<McpTokenRow[]> {
   }));
 }
 
-export async function revokeMcpToken(id: string): Promise<void> {
+export async function revokeMcpToken(id: string, tenantId: string): Promise<void> {
   const db = getAdminClient();
   await db.sql(
-    `UPDATE mcp_tokens SET revoked_at = NOW() WHERE id = $1`,
-    [id],
+    `UPDATE mcp_tokens SET revoked_at = NOW() WHERE id = $1 AND tenant_id = $2`,
+    [id, tenantId],
   );
 }
