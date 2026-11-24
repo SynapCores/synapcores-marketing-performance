@@ -11,8 +11,18 @@ import { clientIpFromHeaders, normalizeIp } from '@/lib/visitor/ip';
 import { mustDropForPrivacy } from '@/lib/visitor/privacy';
 import { classifyVisitor } from '@/lib/visitor/classify';
 import { getCrawlerMatcher } from '@/lib/visitor/crawler-ranges-store';
+import { collectReply } from '@/lib/collect-outcome';
+import { NotAttemptedError } from '@/lib/ingest-ids';
 
 export const runtime = 'nodejs';
+
+/**
+ * A warehouse write that hasn't started this long after the request arrived is
+ * skipped (writes to a table queue behind each other). Keeps every request far
+ * below Apache's 120 s ProxyTimeout, after which the pixel would re-send while
+ * the original rows could still land.
+ */
+const INGEST_DEADLINE_MS = 20_000;
 
 /**
  * First-party clickstream collector — the endpoint `public/track.js` posts to.
@@ -72,6 +82,7 @@ function corsHeaders(origin: string | null): Record<string, string> {
     'Access-Control-Allow-Origin': origin ?? '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'content-type, authorization',
+    'Access-Control-Expose-Headers': 'Retry-After',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
   };
@@ -119,7 +130,16 @@ async function resolveWriteKey(req: Request, batch: BeaconBatch): Promise<Resolv
   return null;
 }
 
+/** "Nothing was stored, send it again": track.js retries 5xx with backoff. */
+function unavailable(cors: Record<string, string>) {
+  return NextResponse.json(
+    { error: { code: 'unavailable', message: 'The batch could not be stored right now; retry later.' } },
+    { status: 503, headers: { ...cors, 'Retry-After': '5' } },
+  );
+}
+
 export async function POST(req: Request) {
+  const startedAt = Date.now();
   const origin = req.headers.get('origin');
   const cors = corsHeaders(origin);
 
@@ -143,7 +163,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: { code: 'bad_body', message: 'Body must be a JSON beacon batch.' } }, { status: 400, headers: cors });
   }
 
-  const key = await resolveWriteKey(req, batch);
+  let key: ResolvedWrite | null;
+  try {
+    key = await resolveWriteKey(req, batch);
+  } catch (e) {
+    // The key lookup (a read) failed, e.g. the engine is restarting: nothing was stored.
+    console.error(`[collect] key lookup failed: ${(e as Error).message}`);
+    return unavailable(cors);
+  }
   if (!key) {
     return NextResponse.json(
       { error: { code: 'unauthorized', message: 'Provide a valid pixel id (beacon data-site-id, pk_...) or Authorization: Bearer sk_user_... for server-to-server.' } },
@@ -172,6 +199,7 @@ export async function POST(req: Request) {
 
   // ── raw visitor events: every event, enriched (IP, geo, UA, bot) ──────────
   let stored = 0;
+  const failures: unknown[] = [];
   try {
     const hops = Number(process.env.TRUSTED_PROXY_HOPS ?? 1) || 1;
     const ip = key.kind === 'key'
@@ -191,22 +219,40 @@ export async function POST(req: Request) {
       userAgent,
       acceptLanguage: req.headers.get('accept-language'),
     });
+    if (req.signal.aborted) throw new NotAttemptedError('the request was aborted');
     stored = await insertEvents(rows);
   } catch (e) {
     // Never let enrichment break attribution ingestion below.
+    failures.push(e);
     console.error('[collect] pm_events insert failed:', (e as Error).message);
   }
 
   const mapped = mapBatch(batch);
+  // Each source on its own: one failing table must not skip the others. A write
+  // still queued when the client has gone or the deadline passed is skipped.
+  const guard = { signal: req.signal, deadline: startedAt + INGEST_DEADLINE_MS };
+  const ingestOne = async (source: string, records: Array<Record<string, unknown>>): Promise<number> => {
+    try {
+      return await ingestSource(source, records, guard);
+    } catch (e) {
+      failures.push(e);
+      console.error(`[collect] ${source} ingest failed: ${(e as Error).message}`);
+      return 0;
+    }
+  };
   const ingested = {
-    clickstream: await ingestSource('clickstream', mapped.clickstream),
-    identity: await ingestSource('identity', mapped.identity),
-    conversions: await ingestSource('conversions', mapped.conversions),
+    clickstream: await ingestOne('clickstream', mapped.clickstream),
+    identity: await ingestOne('identity', mapped.identity),
+    conversions: await ingestOne('conversions', mapped.conversions),
   };
 
   // Keep attribution + scorecard current, but only when something landed.
   const total = ingested.clickstream + ingested.identity + ingested.conversions;
   if (total > 0) scheduleRebuild();
+
+  // The pixel re-sends a batch on 5xx: ask for that only when nothing from it
+  // was stored and no failed write can have stored anything (lib/collect-outcome.ts).
+  if (collectReply({ stored, ingested: total, failures }) === 'retry') return unavailable(cors);
 
   return NextResponse.json({ data: { accepted: batch.events?.length ?? 0, stored, ingested } }, { headers: cors });
 }

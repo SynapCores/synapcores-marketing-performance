@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
 import { resolveBearerKey } from '@/lib/api-auth';
-import { getAdminClient } from '@synapcores/app-framework/db/server';
 import { SOURCES } from '@/lib/sources';
-import { mapRows } from '@/lib/sources';
-import { ingestRows, rebuildDerived } from '@/lib/warehouse';
+import { ingestRecords, rebuildDerived } from '@/lib/warehouse';
 
 export const runtime = 'nodejs';
 
@@ -52,16 +50,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ source: string
     return NextResponse.json({ error: { code: 'empty', message: 'No rows to ingest.' } }, { status: 400 });
   }
 
-  // Auto-number the primary key from the current max so ETL callers can omit it.
-  const db = getAdminClient();
-  let startId = 1;
-  try {
-    const max = await db.sqlScalar<number>(`SELECT COALESCE(MAX(${def.keyColumn}), 0) FROM ${def.table}`);
-    if (typeof max === 'number') startId = max + 1;
-  } catch { /* table may be int-keyed only; text keys ignore startId */ }
-
-  const rows = mapRows(def, records, startId);
-  const ingested = await ingestRows(def.table, def.columns, rows);
+  // Missing primary keys are numbered from the current max, so ETL callers can omit them.
+  const ingested = await ingestRecords(def, records);
   // Keep attribution + the scorecard current after every load.
   try { await rebuildDerived(); } catch { /* base tables may be incomplete; ignore */ }
 

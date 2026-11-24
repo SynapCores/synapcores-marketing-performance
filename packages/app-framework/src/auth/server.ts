@@ -21,6 +21,7 @@ import { z } from 'zod';
 import { getAdminClient } from '../db/server';
 import { DEFAULT_ROLE_GRANTS, type Role } from '../rbac/types';
 import { redeemAuthToken } from './users';
+import { attachFrameworkSession } from './session-state';
 import type {
   Session as FrameworkSession,
   TenantInfo,
@@ -122,11 +123,18 @@ export function createAuth(
       },
       async session({ session, token }) {
         // Stuff our framework session shape onto the Auth.js session
-        // object. App code reads `session.framework`.
+        // object. App code reads `session.framework` through
+        // frameworkSessionOf() (./session-state.ts).
         if (typeof token.userId === 'string') {
-          const framework = await resolveFrameworkSession(token.userId);
-          (session as unknown as { framework: FrameworkSession | null }).framework =
-            framework;
+          // A failed lookup (engine restarting / unreachable) is not "signed
+          // out". Throwing here would make Auth.js return no session (→ /login)
+          // and clear the cookie, so it is flagged instead; readers throw
+          // SessionUnavailableError and the page shows "Reconnecting…".
+          const userId = token.userId;
+          await attachFrameworkSession(
+            session as unknown as { framework?: FrameworkSession | null; frameworkError?: string },
+            () => resolveFrameworkSession(userId),
+          );
         }
         return session;
       },

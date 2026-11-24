@@ -71,7 +71,15 @@ export type { Role, Permission, FrameworkPermission } from './rbac';
 
 // DB types
 export type { QueryResult, SynapCoresClientOptions } from './db';
-export { SynapCoresError } from './db';
+export {
+  SynapCoresError,
+  SynapCoresUnavailableError,
+  ENGINE_UNAVAILABLE_DIGEST,
+  isEngineUnavailableDigest,
+} from './db';
+
+// Session lookup failures ("engine unreachable" is not "signed out")
+export { frameworkSessionOf, SessionUnavailableError, SESSION_LOOKUP_FAILED } from './auth/session-state';
 
 // Agent
 export { AgentClient } from './agent';

@@ -2,8 +2,9 @@ import 'server-only';
 import { getAdminClient } from '@synapcores/app-framework/db/server';
 import { invalidateReports, reportDb } from './report-db';
 import { SCHEMA, TABLES, SEED, ATTRIBUTION, SCORECARD, QUERIES, AGENT_TASK } from './recipe-sql';
-import { SOURCES, mapRows } from './sources';
+import { SOURCES, mapRows, type SourceDef } from './sources';
 import { rebuildDerivedWith, runExclusive, runShared, type WriterQueue } from './derived-rebuild';
+import { createKeyedQueue, insertNumbered, isDuplicateKeyError, writeGuard, type KeyedQueue } from './ingest-ids';
 
 /**
  * The performance-marketing warehouse — recipe 121 as a first-class data layer.
@@ -141,18 +142,25 @@ export function loadSampleData(): Promise<void> {
 /**
  * Insert parsed rows (array of objects) into a warehouse table. Chunked.
  * Clears the report cache afterwards unless `invalidate` is false (the pixel
- * collector: its rows show up within the cache TTL).
+ * collector: its rows show up within the cache TTL). `ignoreConflictsOn`: skip
+ * rows whose key already exists (ON CONFLICT (key) DO NOTHING).
  */
-export async function ingestRows(table: string, columns: string[], rows: unknown[][], opts: { invalidate?: boolean } = {}) {
+export async function ingestRows(
+  table: string,
+  columns: string[],
+  rows: unknown[][],
+  opts: { invalidate?: boolean; ignoreConflictsOn?: string } = {},
+) {
   if (!rows.length) return 0;
   try {
     await ensureSchema();
-    const chunk = 200;
+    const chunk = INGEST_CHUNK_ROWS;
+    const onConflict = opts.ignoreConflictsOn ? ` ON CONFLICT (${opts.ignoreConflictsOn}) DO NOTHING` : '';
     let n = 0;
     for (let i = 0; i < rows.length; i += chunk) {
       const slice = rows.slice(i, i + chunk);
       const values = slice.map((r) => '(' + r.map((v) => sqlLit(v)).join(',') + ')').join(',');
-      await run(`INSERT INTO ${table} (${columns.join(',')}) VALUES ${values}`);
+      await run(`INSERT INTO ${table} (${columns.join(',')}) VALUES ${values}${onConflict}`);
       n += slice.length;
     }
     // creative embeddings are populated on ingest
@@ -161,32 +169,96 @@ export async function ingestRows(table: string, columns: string[], rows: unknown
     }
     return n;
   } catch (e) {
-    schemaChanged(); // e.g. a table dropped outside the app: recreate it on the next call
+    // e.g. a table dropped outside the app: recreate it on the next call (a
+    // duplicate key proves the table exists).
+    if (!isDuplicateKeyError(e)) schemaChanged();
     throw e;
   } finally {
     if (opts.invalidate !== false) invalidateReports();
   }
 }
 
+/** Rows per INSERT statement in ingestRows. */
+const INGEST_CHUNK_ROWS = 200;
+
+// One writer per table (see ingest-ids.ts: concurrent MAX + 1 numbering lost
+// whole batches). On globalThis so the collector route, the ingest API and the
+// CSV server action (separate module instances) share it.
+const INGEST_QUEUE = Symbol.for('synapcores.marketing-performance.ingest-queue');
+function ingestQueue(): KeyedQueue {
+  const g = globalThis as unknown as Record<symbol, KeyedQueue | undefined>;
+  let q = g[INGEST_QUEUE];
+  if (!q) {
+    q = createKeyedQueue();
+    g[INGEST_QUEUE] = q;
+  }
+  return q;
+}
+
+const blankKey = (v: unknown) => v === undefined || v === null || v === '';
+
+async function nextKeyAfterMax(def: SourceDef): Promise<number> {
+  const max = await db().sqlScalar<number>(`SELECT COALESCE(MAX(${def.keyColumn}), 0) FROM ${def.table}`);
+  return typeof max === 'number' ? max + 1 : 1;
+}
+
+export interface IngestOptions {
+  /** Clear the report cache afterwards (default true). */
+  invalidate?: boolean;
+  /** Aborted when the caller has gone away: a queued write is then skipped (NotAttemptedError). */
+  signal?: AbortSignal;
+  /** Epoch ms after which a queued write is skipped instead of started (NotAttemptedError). */
+  deadline?: number;
+}
+
 /**
- * Ingest an array of source-shaped objects into a named source's warehouse
- * table, auto-numbering the primary key from the current max so callers may
- * omit it. Used by the first-party beacon collector, so it doesn't clear the
- * report cache (beacon data shows up within the cache TTL; the coalesced
- * rebuildDerived() that follows does clear it).
+ * Ingest source-shaped objects into the source's warehouse table, numbering
+ * missing primary keys from the current max (callers may omit them). Writes to
+ * a table run one at a time in the process; an id collision with another
+ * writer is renumbered and retried when all ids are ours and the rows fit one
+ * INSERT. Sources with `conflict: 'ignore'` skip rows whose key exists.
+ * Shared by the beacon collector, the REST ingestion API and the CSV upload.
+ * Returns the number of rows sent.
+ */
+export async function ingestRecords(
+  def: SourceDef,
+  records: Array<Record<string, unknown>>,
+  opts: IngestOptions = {},
+): Promise<number> {
+  if (!records.length) return 0;
+  await ensureSchema();
+  const missing = records.filter((r) => blankKey({ ...(def.fixed ?? {}), ...r }[def.keyColumn])).length;
+  return ingestQueue()(def.table, () =>
+    insertNumbered({
+      check: writeGuard({ signal: opts.signal, deadline: opts.deadline }),
+      // MAX only when some row needs a number; its errors propagate (no silent id 1).
+      nextId: missing ? () => nextKeyAfterMax(def) : async () => 1,
+      insert: (startId) =>
+        ingestRows(def.table, def.columns, mapRows(def, records, startId), {
+          invalidate: opts.invalidate,
+          ignoreConflictsOn: def.conflict === 'ignore' ? def.keyColumn : undefined,
+        }),
+      renumberable: missing === records.length && records.length <= INGEST_CHUNK_ROWS,
+      onCollision: (attempt) =>
+        console.warn(`[ingest] ${def.table}: id collision with another writer, renumbering (attempt ${attempt + 1})`),
+    }),
+  );
+}
+
+/**
+ * The first-party beacon collector's entry point: ingestRecords() for a named
+ * source, without clearing the report cache (beacon data shows up within the
+ * cache TTL; the coalesced rebuildDerived() that follows does clear it).
  * Returns the number of rows written (0 for an empty or unknown source).
  */
-export async function ingestSource(sourceId: string, records: Array<Record<string, unknown>>): Promise<number> {
+export async function ingestSource(
+  sourceId: string,
+  records: Array<Record<string, unknown>>,
+  opts: Pick<IngestOptions, 'signal' | 'deadline'> = {},
+): Promise<number> {
   const def = SOURCES[sourceId];
   if (!def || !records.length) return 0;
-  await ensureSchema();
-  let startId = 1;
-  try {
-    const max = await db().sqlScalar<number>(`SELECT COALESCE(MAX(${def.keyColumn}), 0) FROM ${def.table}`);
-    if (typeof max === 'number') startId = max + 1;
-  } catch { /* text-keyed tables ignore startId */ }
-  const rows = mapRows(def, records, startId);
-  return ingestRows(def.table, def.columns, rows, { invalidate: false });
+  return ingestRecords(def, records, { ...opts, invalidate: false });
 }
 
 function sqlLit(v: unknown): string {

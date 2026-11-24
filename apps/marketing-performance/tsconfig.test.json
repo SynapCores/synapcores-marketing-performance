@@ -24,6 +24,9 @@
     "src/lib/query-cache.ts",
     "src/lib/recipe-sql.ts",
     "src/lib/derived-rebuild.ts",
+    "src/lib/ingest-ids.ts",
+    "src/lib/collect-outcome.ts",
+    "src/lib/reconnect-policy.ts",
     "src/lib/installs/**/*.ts",
     "src/app/hydration-gate.ts"
   ]

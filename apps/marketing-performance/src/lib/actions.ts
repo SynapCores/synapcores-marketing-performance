@@ -2,14 +2,13 @@
 import { revalidatePath } from 'next/cache';
 import { requireSession } from './session';
 import { assertCanWrite } from './security';
-import { loadSampleData, rebuildDerived, ingestRows, clearAll, recommend } from './warehouse';
+import { loadSampleData, rebuildDerived, ingestRecords, clearAll, recommend } from './warehouse';
 
 export async function recommendAction() {
   await requireSession();
   return recommend();
 }
-import { SOURCES, mapRows } from './sources';
-import { getAdminClient } from '@synapcores/app-framework/db/server';
+import { SOURCES } from './sources';
 
 export async function loadSampleAction() {
   assertCanWrite(await requireSession());
@@ -41,15 +40,7 @@ export async function ingestCsvAction(source: string, csv: string) {
   const rows = parseCsv(csv);
   if (!rows.length) return { ok: false, error: 'No data rows found in the CSV.' };
 
-  const db = getAdminClient();
-  let startId = 1;
-  try {
-    const max = await db.sqlScalar<number>(`SELECT COALESCE(MAX(${def.keyColumn}), 0) FROM ${def.table}`);
-    if (typeof max === 'number') startId = max + 1;
-  } catch { /* ignore */ }
-
-  const mapped = mapRows(def, rows, startId);
-  const n = await ingestRows(def.table, def.columns, mapped);
+  const n = await ingestRecords(def, rows);
   try { await rebuildDerived(); } catch { /* ignore */ }
   revalidatePath('/dashboard'); revalidatePath('/tables');
   return { ok: true, ingested: n, table: def.table };

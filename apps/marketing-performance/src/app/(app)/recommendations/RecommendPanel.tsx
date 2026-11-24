@@ -2,6 +2,7 @@
 import { useState, useTransition } from 'react';
 import { Card, CardContent, Button } from '@synapcores/app-framework';
 import { recommendAction } from '@/lib/actions';
+import { actionErrorMessage } from '@/lib/action-errors';
 
 type Rec = { source: 'agent_run' | 'fallback'; text: string; tookMs: number; reason?: string };
 
@@ -14,7 +15,7 @@ export function RecommendPanel() {
     setErr(null); setRec(null);
     start(async () => {
       try { setRec(await recommendAction()); }
-      catch (e) { setErr(String((e as Error).message)); }
+      catch (e) { setErr(actionErrorMessage(e, 'The analytics engine is restarting. Try again in a few seconds.')); }
     });
   }
 

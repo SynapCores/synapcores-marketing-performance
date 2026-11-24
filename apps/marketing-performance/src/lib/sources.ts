@@ -11,6 +11,8 @@ export interface SourceDef {
   keyColumn: string;      // primary key column (used to auto-number if absent)
   /** columns the caller may omit; we fill them (e.g. platform for FB/TT/GG). */
   fixed?: Record<string, string | number>;
+  /** 'ignore': a row whose key already exists is skipped (natural keys, e.g. an anonymous id identified again). */
+  conflict?: 'ignore';
   sample?: string;        // example row for docs
 }
 
@@ -42,6 +44,7 @@ export const SOURCES: Record<string, SourceDef> = {
   identity: {
     id: 'identity', label: 'Identity resolution', table: 'recipe_pm_identity',
     columns: ['anonymous_id', 'customer_id', 'identified_at'], keyColumn: 'anonymous_id',
+    conflict: 'ignore', // the first identification of a browser wins; a repeat isn't an error
     sample: '{"anonymous_id":"a_f01","customer_id":501,"identified_at":"2026-05-08 09:00:00"}',
   },
   conversions: {

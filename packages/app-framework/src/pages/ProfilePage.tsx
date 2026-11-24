@@ -1,6 +1,7 @@
 import 'server-only';
 import { redirect } from 'next/navigation';
 import { auth } from '../routes/auth';
+import { frameworkSessionOf } from '../auth/session-state';
 import {
   AppPageHeader,
   Button,
@@ -17,9 +18,8 @@ import { getAdminClient } from '../db/server';
 import type { Session } from '../auth/types';
 
 async function getSession(): Promise<Session | null> {
-  const raw = await auth();
-  if (!raw) return null;
-  return (raw as unknown as { framework: Session | null }).framework ?? null;
+  // Throws SessionUnavailableError (shown as "reconnecting") when the lookup failed.
+  return frameworkSessionOf(await auth());
 }
 
 async function updateProfileName(formData: FormData): Promise<void> {

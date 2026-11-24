@@ -2,6 +2,7 @@
 import { useState, useTransition } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, Button } from '@synapcores/app-framework';
 import { loadSampleAction, clearAction, ingestCsvAction } from '@/lib/actions';
+import { actionErrorMessage } from '@/lib/action-errors';
 
 interface SourceInfo { id: string; label: string; table: string; columns: string[]; sample?: string }
 
@@ -18,7 +19,11 @@ export function IngestPanel({ sources, origin }: { sources: SourceInfo[]; origin
         const r = await fn();
         if (r.error) setMsg({ kind: 'err', text: r.error });
         else setMsg({ kind: 'ok', text: r.ingested != null ? `Ingested ${r.ingested} rows into ${r.table}.` : `${label} complete.` });
-      } catch (e) { setMsg({ kind: 'err', text: String((e as Error).message) }); }
+      } catch (e) {
+        // A large upload may have stored its first chunks before the engine went away.
+        const engineDown = 'The analytics engine was restarting, so this may be incomplete. Check Data Tables in a few seconds before trying again.';
+        setMsg({ kind: 'err', text: actionErrorMessage(e, engineDown) });
+      }
     });
   }
 

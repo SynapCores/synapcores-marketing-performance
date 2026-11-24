@@ -12,11 +12,21 @@ import 'server-only';
 import { auth } from './auth';
 import { getClientForSession } from '../db/server';
 import { requirePermission, FRAMEWORK_PERMISSIONS, PermissionError } from '../rbac';
+import { frameworkSessionOf, SessionUnavailableError } from '../auth/session-state';
 import type { Session } from '../auth/types';
 
 export async function GET(request: Request): Promise<Response> {
-  const raw = await auth();
-  const session = (raw as unknown as { framework: Session | null })?.framework ?? null;
+  let session: Session | null;
+  try {
+    session = frameworkSessionOf(await auth());
+  } catch (err) {
+    if (!(err instanceof SessionUnavailableError)) throw err;
+    // The engine is restarting: "try again shortly", not 401.
+    return new Response(JSON.stringify({ error: 'The database engine is unreachable; retry shortly.' }), {
+      status: 503,
+      headers: { 'content-type': 'application/json', 'retry-after': '5' },
+    });
+  }
   try {
     requirePermission(session, FRAMEWORK_PERMISSIONS.AUDIT_READ);
   } catch (err) {
