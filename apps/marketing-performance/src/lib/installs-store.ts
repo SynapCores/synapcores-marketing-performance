@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { getAdminClient } from '@synapcores/app-framework/db/server';
 import { invalidateReports, reportDb } from './report-db';
-import { ensureEventsTable, lit, visitorContext, windowStart } from './event-store';
+import { ensureEventsTable, eventsReadTable, lit, visitorContext, windowStart } from './event-store';
 import { TOUCH_EVENTS } from './collector';
 import { sqlTs } from './visitor/events';
 import {
@@ -390,19 +390,19 @@ export async function downloadFunnel(tenantId: string, days: number): Promise<Do
   const [visits, cta, ever, ctx] = await Promise.all([
     rdb.sql<Row>(
       `SELECT anonymous_id, SUM(CASE WHEN event_type = 'pageview' OR event_type = 'page_view' THEN 1 ELSE 0 END) AS pageviews
-         FROM pm_events
+         FROM ${eventsReadTable()}
         WHERE tenant_id = $1 AND occurred_at >= $2 AND is_bot = FALSE AND site IN (${siteList})
           AND page_path IN (${DOWNLOAD_PATHS.map(lit).join(',')}) AND event_type IN (${TOUCH_LIST})
         GROUP BY anonymous_id LIMIT ${cap}`,
       [tenantId, since],
     ),
     rdb.sql<Row>(
-      `SELECT anonymous_id FROM pm_events
+      `SELECT anonymous_id FROM ${eventsReadTable()}
         WHERE tenant_id = $1 AND occurred_at >= $2 AND is_bot = FALSE AND site IN (${siteList}) AND event_type IN (${ctaList})
         GROUP BY anonymous_id LIMIT ${cap}`,
       [tenantId, since],
     ),
-    rdb.sql<Row>(`SELECT anonymous_id FROM pm_events WHERE tenant_id = $1 AND site IN (${siteList}) AND event_type IN (${ctaList}) LIMIT 1`, [tenantId]),
+    rdb.sql<Row>(`SELECT anonymous_id FROM ${eventsReadTable()} WHERE tenant_id = $1 AND site IN (${siteList}) AND event_type IN (${ctaList}) LIMIT 1`, [tenantId]),
     visitorContext(tenantId),
   ]);
   // Humans only: bots, internal and suspected visitors are left out (like the conversion funnel).

@@ -33,6 +33,12 @@
  *                                         rotation (header salt_id changed) is always allowed.
  *      INSTALLS_DOWNLOAD_SITES            sites whose /download page feeds the funnel tile,
  *                                         default "synapcores.com,www.synapcores.com"
+ *
+ * 5. PM_EVENTS_V2=1 (lib/events-migration.ts): visitor events move to
+ *    pm_events_v2 (no primary key, no index). At boot new events start going
+ *    to pm_events_v2 and pm_events is copied over in the background; pages
+ *    switch once the copy is verified. The IP sweep and the reclassify are
+ *    deferred until then and run on pm_events_v2. Unset = pm_events as before.
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
@@ -60,17 +66,31 @@ export async function register() {
     statsTimer.unref?.();
   }
 
-  if (process.env.IP_RETENTION_SWEEP !== 'off') {
-    const { truncateExpiredIps } = await import('./lib/event-store');
-    const { sweepIntervalMs } = await import('./lib/visitor/retention');
-    const run = async () => {
-      try {
-        const r = await truncateExpiredIps();
-        console.log(`[retention] pm_events: truncated ${r.updated} IP(s) received before ${r.cutoff} UTC (${r.days}-day window)`);
-      } catch (e) {
-        console.error('[retention] pm_events sweep failed:', (e as Error).message);
+  const sweepOn = process.env.IP_RETENTION_SWEEP !== 'off';
+  /** Deferred while the pm_events_v2 backfill runs; loud when the backfill has stopped (nothing is swept then). */
+  const deferredNote = async (what: string) => {
+    const { pmEventsMigrationStatus } = await import('./lib/events-migration');
+    const m = pmEventsMigrationStatus();
+    if (m.status === 'stopped') console.error(`${what} deferred, and the pm_events_v2 backfill has STOPPED (${m.error}); see the runbook`);
+    else console.log(`${what} deferred: the pm_events_v2 backfill is running (it runs this when done)`);
+  };
+  const runSweep = async () => {
+    try {
+      const { truncateExpiredIps } = await import('./lib/event-store');
+      const r = await truncateExpiredIps();
+      if (r.deferred) await deferredNote('[retention] sweep');
+      else {
+        const legacy = r.legacyUpdated === undefined ? '' : `; frozen pm_events: ${r.legacyUpdated}`;
+        console.log(`[retention] ${r.table}: truncated ${r.updated} IP(s) received before ${r.cutoff} UTC (${r.days}-day window)${legacy}`);
       }
-    };
+    } catch (e) {
+      console.error('[retention] pm_events sweep failed:', (e as Error).message);
+    }
+  };
+
+  if (sweepOn) {
+    const { sweepIntervalMs } = await import('./lib/visitor/retention');
+    const run = runSweep;
     const first = setTimeout(run, 60_000);
     first.unref?.();
     const every = setInterval(run, sweepIntervalMs());
@@ -98,6 +118,33 @@ export async function register() {
 
   const { getCrawlerMatcher, rangesAgeMs, refreshCrawlerRanges, refreshIntervalMs } = await import('./lib/visitor/crawler-ranges-store');
   const { reclassifyEvents } = await import('./lib/event-store');
+  const runReclassify = async () => {
+    try {
+      const r = await reclassifyEvents(getCrawlerMatcher());
+      if (r.deferred) {
+        await deferredNote('[crawlers] reclassify');
+      } else if (r.scanned) {
+        console.log(`[crawlers] reclassified ${r.table ?? 'pm_events'}: scanned ${r.scanned}, changed ${r.changed}; events human/bot before ${r.before.human}/${r.before.bot}, after ${r.after.human}/${r.after.bot}`);
+      }
+    } catch (e) {
+      console.error('[crawlers] reclassify failed:', (e as Error).message);
+    }
+  };
+
+  const { pmEventsV2Enabled } = await import('./lib/visitor/events-v2');
+  if (pmEventsV2Enabled()) {
+    const { retryStoppedPmEventsMigration, startPmEventsMigration } = await import('./lib/events-migration');
+    const hooks = {
+      afterBackfill: async () => {
+        if (sweepOn) await runSweep();
+        await runReclassify();
+      },
+    };
+    void startPmEventsMigration(hooks);
+    // A backfill stopped by engine trouble resumes by itself (an integrity stop waits for a person).
+    const retry = setInterval(() => retryStoppedPmEventsMigration(hooks), 15 * 60_000);
+    retry.unref?.();
+  }
   const refresh = async () => {
     if (process.env.CRAWLER_RANGES_REFRESH === 'off') return;
     try {
@@ -109,14 +156,7 @@ export async function register() {
   };
   const boot = setTimeout(async () => {
     if (rangesAgeMs() > refreshIntervalMs()) await refresh();
-    try {
-      const r = await reclassifyEvents(getCrawlerMatcher());
-      if (r.scanned) {
-        console.log(`[crawlers] reclassified pm_events: scanned ${r.scanned}, changed ${r.changed}; events human/bot before ${r.before.human}/${r.before.bot}, after ${r.after.human}/${r.after.bot}`);
-      }
-    } catch (e) {
-      console.error('[crawlers] reclassify failed:', (e as Error).message);
-    }
+    await runReclassify();
   }, 15_000);
   boot.unref?.();
   const daily = setInterval(refresh, refreshIntervalMs());

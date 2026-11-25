@@ -5,14 +5,19 @@ import { invalidateReports, reportDb } from './report-db';
 import { PM_EVENTS_ADDED_COLUMNS, PM_EVENTS_DDL, PM_EVENT_COLUMNS, sqlTs, type PmEventRow } from './visitor/events';
 import { CLASSIFIER_VERSION, classifyVisitor, type Classification } from './visitor/classify';
 import type { CrawlerMatcher } from './visitor/crawler-ranges';
-import { retentionCutoff, retentionDays, truncationSql } from './visitor/retention';
+import { retentionCutoff, retentionDays, truncationGuardSql, truncationSql } from './visitor/retention';
 import { visitorSource } from './visitor/source';
 import { buildFunnel, FUNNEL_EVENT_TYPES, FUNNEL_STEPS, type FunnelReport } from './visitor/funnel';
 import { classifyKinds, kindMatches, PASSIVE_EVENTS, type KindFilter, type KindVerdict, type VisitorKind, type VisitorProfile } from './visitor/kinds';
 import { trafficRules } from './visitor/traffic-rules';
 import { lookupAsn } from './visitor/asn';
 import { buildCampaignReport, type CampaignReportRow, type ConversionRow, type SavedCampaign, type TouchRow } from './visitor/campaigns';
+import { lit } from './visitor/sql-lit';
+import { ensurePmEventsStore, eventsTables } from './events-migration';
+import { NotAttemptedError } from './ingest-ids';
 import { randomUUID } from 'node:crypto';
+
+export { lit };
 
 /**
  * Raw visitor events (`pm_events`) — writes from the collector, retention
@@ -24,13 +29,36 @@ import { randomUUID } from 'node:crypto';
  * Report reads go through reportDb(tenantId) (short-lived cache, see
  * report-db.ts); writes use db() and invalidate. New pixel events (insertEvents)
  * show up within the cache TTL instead of clearing it on every beacon.
+ *
+ * PM_EVENTS_V2=1 moves the events to pm_events_v2 (no primary key, no index;
+ * events-migration.ts): writes switch at the cutover, reads once the copy of
+ * pm_events is verified. Table names come from eventsTables(); with the flag
+ * off they are pm_events and every statement is the same as before.
  */
 
 const db = () => getAdminClient();
 type Row = Record<string, unknown>;
 
+/** Table the reads use now (pm_events, or pm_events_v2 after a verified migration). */
+export function eventsReadTable(): string {
+  return eventsTables().read;
+}
+
+/** Table new events go to; never pm_events once the cutover happened. */
+function eventsWriteTable(): string {
+  const w = eventsTables().write;
+  if (!w) throw new NotAttemptedError('the pm_events_v2 state is not loaded');
+  return w;
+}
+
+/** Create/upgrade pm_events (as before), then, with PM_EVENTS_V2 on, load the v2 state. */
+export async function ensureEventsTable(): Promise<void> {
+  await ensureLegacyEventsTable();
+  await ensurePmEventsStore();
+}
+
 let ensured: Promise<void> | null = null;
-export function ensureEventsTable(): Promise<void> {
+function ensureLegacyEventsTable(): Promise<void> {
   if (!ensured) {
     ensured = (async () => {
       for (const ddl of PM_EVENTS_DDL) await db().sql(ddl);
@@ -49,34 +77,50 @@ export function ensureEventsTable(): Promise<void> {
   return ensured;
 }
 
-export function lit(v: unknown): string {
-  if (v === null || v === undefined) return 'NULL';
-  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
-  if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL';
-  // Standard SQL literal: the engine treats backslash literally, so doubling
-  // single quotes is a complete escape. NULs are stripped.
-  return `'${String(v).replace(/\u0000/g, '').replace(/'/g, "''")}'`;
-}
-
 /** Insert enriched rows in one multi-row statement. Returns rows written. */
 export async function insertEvents(rows: PmEventRow[]): Promise<number> {
   if (!rows.length) return 0;
   await ensureEventsTable();
+  const table = eventsWriteTable();
   const values = rows.map((r) => '(' + PM_EVENT_COLUMNS.map((c) => lit(r[c])).join(',') + ')').join(',');
-  await db().sql(`INSERT INTO pm_events (${PM_EVENT_COLUMNS.join(',')}) VALUES ${values}`);
+  await db().sql(`INSERT INTO ${table} (${PM_EVENT_COLUMNS.join(',')}) VALUES ${values}`);
   return rows.length;
 }
 
-/** Retention sweep: full IP → /24 or /48 prefix for events older than the window. */
-export async function truncateExpiredIps(now = new Date()): Promise<{ cutoff: string; days: number; updated: number }> {
+/**
+ * Retention sweep: full IP → /24 or /48 prefix for events older than the window.
+ * While the pm_events_v2 backfill runs it is deferred (`deferred: true`): the
+ * migration runs it on pm_events_v2 as soon as the copy is verified.
+ */
+export async function truncateExpiredIps(
+  now = new Date(),
+): Promise<{ cutoff: string; days: number; updated: number; table: string; deferred?: boolean; legacyUpdated?: number }> {
   await ensureEventsTable();
   const days = retentionDays();
   const cutoff = retentionCutoff(now, days);
-  const res = await db().sql(truncationSql(cutoff)).finally(() => invalidateReports());
+  const { read, write } = eventsTables();
+  if (!write || write !== read) return { cutoff, days, updated: 0, table: read, deferred: true };
+  if (write !== 'pm_events_v2') {
+    const updated = await sweep(cutoff, 'pm_events');
+    return { cutoff, days, updated, table: write };
+  }
+  // pm_events_v2 holds the events. The frozen pm_events (rollback source) keeps old rows too, so it
+  // is swept as well, or its full IPs would outlive the retention window. Both are guarded: on
+  // 2.5.1 the UPDATE costs ~+370 MB of engine memory even when it matches nothing.
+  const updated = await sweep(cutoff, 'pm_events_v2', true);
+  const legacyUpdated = await sweep(cutoff, 'pm_events', true);
+  return { cutoff, days, updated, table: write, legacyUpdated };
+}
+
+async function sweep(cutoff: string, table: 'pm_events' | 'pm_events_v2', guarded = false): Promise<number> {
+  if (guarded) {
+    const pending = await db().sql<Row>(truncationGuardSql(cutoff, table));
+    if (!pending.rows.length) return 0;
+  }
+  const res = await db().sql(truncationSql(cutoff, table)).finally(() => invalidateReports());
   // The engine answers an UPDATE with a single [[count]] row.
   const first = res.rows[0] ? Object.values(res.rows[0] as Row)[0] : undefined;
-  const updated = Number(typeof first === 'number' ? first : res.rowCount) || 0;
-  return { cutoff, days, updated };
+  return Number(typeof first === 'number' ? first : res.rowCount) || 0;
 }
 
 // ── reads ────────────────────────────────────────────────────────────────────
@@ -162,7 +206,7 @@ export async function listVisitors(tenantId: string, f: VisitorFilters, limit = 
               SUM(CASE WHEN event_type = 'pageview' OR event_type = 'page_view' THEN 1 ELSE 0 END) AS pageviews,
               COUNT(DISTINCT page_path) AS pages,
               MAX(CASE WHEN is_bot = TRUE THEN 1 ELSE 0 END) AS any_bot
-         FROM pm_events WHERE ${w.sql}
+         FROM ${eventsReadTable()} WHERE ${w.sql}
         GROUP BY anonymous_id ORDER BY last_seen DESC LIMIT ${MAX_VISITORS}`,
       w.params,
     ),
@@ -191,13 +235,13 @@ export async function listVisitors(tenantId: string, f: VisitorFilters, limit = 
     `SELECT * FROM (SELECT tenant_id, anonymous_id, ip, ip_truncated, country, country_name, region, city, browser, browser_version, os,
             device_type, is_bot, bot_name, bot_category, bot_verified, site,
             ROW_NUMBER() OVER (PARTITION BY anonymous_id ORDER BY is_bot DESC, occurred_at DESC) AS rn
-       FROM pm_events WHERE tenant_id = $1 AND anonymous_id IN (${inList})) z WHERE rn = 1`,
+       FROM ${eventsReadTable()} WHERE tenant_id = $1 AND anonymous_id IN (${inList})) z WHERE rn = 1`,
     [tenantId, ...ids],
   );
   const first = await rdb.sql<Row>(
     `SELECT * FROM (SELECT tenant_id, anonymous_id, site, page_path, referrer_domain, utm_source, utm_medium, utm_campaign, utm_content, gclid, fbclid, ttclid, msclkid,
             ROW_NUMBER() OVER (PARTITION BY anonymous_id ORDER BY occurred_at ASC) AS rn
-       FROM pm_events WHERE tenant_id = $1 AND anonymous_id IN (${inList})) z WHERE rn = 1`,
+       FROM ${eventsReadTable()} WHERE tenant_id = $1 AND anonymous_id IN (${inList})) z WHERE rn = 1`,
     [tenantId, ...ids],
   );
   const L = new Map(latest.rows.map((r) => [String(r.anonymous_id), r]));
@@ -255,10 +299,13 @@ interface VisitorContext {
 const ctxCache = new Map<string, { at: number; p: Promise<VisitorContext> }>();
 const CTX_TTL_MS = 30_000;
 
+/** Cache key: tenant + the events table read (a switch to pm_events_v2 starts a fresh context). */
+const ctxKey = (tenantId: string) => `${tenantId}\u0000${eventsReadTable()}`;
+
 /** Drop the cached kinds/touches (after a write that changes them). */
 export function invalidateVisitorContext(tenantId?: string) {
-  if (tenantId) ctxCache.delete(tenantId);
-  else ctxCache.clear();
+  if (!tenantId) return ctxCache.clear();
+  for (const k of [...ctxCache.keys()]) if (k.startsWith(`${tenantId}\u0000`)) ctxCache.delete(k);
 }
 
 /**
@@ -267,13 +314,16 @@ export function invalidateVisitorContext(tenantId?: string) {
  * just the filtered page) and cached for 30 s.
  */
 export function visitorContext(tenantId: string): Promise<VisitorContext> {
-  const hit = ctxCache.get(tenantId);
+  const key = ctxKey(tenantId);
+  const hit = ctxCache.get(key);
   if (hit && Date.now() - hit.at < CTX_TTL_MS) return hit.p;
   const p = loadVisitorContext(tenantId).catch((e) => {
-    ctxCache.delete(tenantId);
+    ctxCache.delete(key);
     throw e;
   });
-  ctxCache.set(tenantId, { at: Date.now(), p });
+  // One entry per tenant: drop its entry for the other table (after the switch to pm_events_v2).
+  for (const k of [...ctxCache.keys()]) if (k !== key && k.startsWith(`${tenantId}\u0000`)) ctxCache.delete(k);
+  ctxCache.set(key, { at: Date.now(), p });
   return p;
 }
 
@@ -287,16 +337,16 @@ async function loadVisitorContext(tenantId: string): Promise<VisitorContext> {
               SUM(CASE WHEN event_type = 'pageview' OR event_type = 'page_view' THEN 1 ELSE 0 END) AS pageviews,
               SUM(CASE WHEN event_type IN (${PASSIVE_LIST}) THEN 0 ELSE 1 END) AS interactions,
               MAX(CASE WHEN is_bot = TRUE THEN 1 ELSE 0 END) AS any_bot
-         FROM pm_events WHERE tenant_id = $1 GROUP BY anonymous_id LIMIT ${MAX_VISITORS}`,
+         FROM ${eventsReadTable()} WHERE tenant_id = $1 GROUP BY anonymous_id LIMIT ${MAX_VISITORS}`,
       [tenantId],
     ),
     db().sql<Row>(
       `SELECT * FROM (SELECT tenant_id, anonymous_id, site, utm_source, referrer_domain, browser, os, device_type, screen_w, screen_h,
               ROW_NUMBER() OVER (PARTITION BY anonymous_id ORDER BY occurred_at ASC) AS rn
-         FROM pm_events WHERE tenant_id = $1) z WHERE rn = 1 LIMIT ${MAX_VISITORS}`,
+         FROM ${eventsReadTable()} WHERE tenant_id = $1) z WHERE rn = 1 LIMIT ${MAX_VISITORS}`,
       [tenantId],
     ),
-    db().sql<Row>(`SELECT anonymous_id, ip FROM pm_events WHERE tenant_id = $1 AND ip IS NOT NULL GROUP BY anonymous_id, ip LIMIT ${MAX_VISITORS * 3}`, [tenantId]),
+    db().sql<Row>(`SELECT anonymous_id, ip FROM ${eventsReadTable()} WHERE tenant_id = $1 AND ip IS NOT NULL GROUP BY anonymous_id, ip LIMIT ${MAX_VISITORS * 3}`, [tenantId]),
     utmTouches(tenantId, null),
   ]);
   const F = new Map(first.rows.map((r) => [String(r.anonymous_id), r]));
@@ -351,7 +401,7 @@ export async function kindCounts(tenantId: string, sinceTs: string | null, site?
     where += ` AND site = $${params.length}`;
   }
   const [r, ctx] = await Promise.all([
-    reportDb(tenantId).sql<Row>(`SELECT anonymous_id, MAX(CASE WHEN is_bot = TRUE THEN 1 ELSE 0 END) AS any_bot FROM pm_events WHERE ${where} GROUP BY anonymous_id LIMIT ${MAX_VISITORS}`, params),
+    reportDb(tenantId).sql<Row>(`SELECT anonymous_id, MAX(CASE WHEN is_bot = TRUE THEN 1 ELSE 0 END) AS any_bot FROM ${eventsReadTable()} WHERE ${where} GROUP BY anonymous_id LIMIT ${MAX_VISITORS}`, params),
     visitorContext(tenantId),
   ]);
   const out: Record<VisitorKind, number> = { human: 0, internal: 0, suspected: 0, bot: 0 };
@@ -377,7 +427,7 @@ async function utmTouches(tenantId: string, f: { site?: string | null; from?: st
   const r = await (f ? reportDb(tenantId) : db()).sql<Row>(
     `SELECT site, utm_source, utm_medium, utm_campaign, utm_content, anonymous_id, session_id, MIN(occurred_at) AS first_at,
             SUM(CASE WHEN event_type = 'pageview' OR event_type = 'page_view' THEN 1 ELSE 0 END) AS pageviews
-       FROM pm_events WHERE ${parts.join(' AND ')}
+       FROM ${eventsReadTable()} WHERE ${parts.join(' AND ')}
       GROUP BY site, utm_source, utm_medium, utm_campaign, utm_content, anonymous_id, session_id LIMIT 100000`,
     params,
   );
@@ -397,7 +447,7 @@ export async function campaignReport(tenantId: string, f: CampaignFilters): Prom
   const [touches, conv, saved, ctx] = await Promise.all([
     utmTouches(tenantId, f),
     reportDb(tenantId).sql<Row>(
-      `SELECT anonymous_id, event_type, MIN(occurred_at) AS first_at FROM pm_events
+      `SELECT anonymous_id, event_type, MIN(occurred_at) AS first_at FROM ${eventsReadTable()}
         WHERE tenant_id = $1 AND event_type IN (${CONVERSION_TYPES.map(lit).join(',')}) GROUP BY anonymous_id, event_type LIMIT 100000`,
       [tenantId],
     ),
@@ -467,7 +517,7 @@ export async function visitorEvents(tenantId: string, anonymousId: string, limit
   await ensureEventsTable();
   const lim = Math.max(1, Math.min(5000, Math.floor(limit)));
   const res = await reportDb(tenantId).sql<Row>(
-    `SELECT * FROM pm_events WHERE tenant_id = $1 AND anonymous_id = $2 ORDER BY occurred_at ASC LIMIT ${lim}`,
+    `SELECT * FROM ${eventsReadTable()} WHERE tenant_id = $1 AND anonymous_id = $2 ORDER BY occurred_at ASC LIMIT ${lim}`,
     [tenantId, anonymousId],
   );
   return res.rows;
@@ -485,16 +535,16 @@ export async function filterOptions(tenantId: string): Promise<FilterOptions> {
   await ensureEventsTable();
   const rdb = reportDb(tenantId);
   const sites = await rdb.sql<Row>(
-    `SELECT site, COUNT(*) AS n FROM pm_events WHERE tenant_id = $1 AND site IS NOT NULL GROUP BY site ORDER BY n DESC LIMIT 50`,
+    `SELECT site, COUNT(*) AS n FROM ${eventsReadTable()} WHERE tenant_id = $1 AND site IS NOT NULL GROUP BY site ORDER BY n DESC LIMIT 50`,
     [tenantId],
   );
   const countries = await rdb.sql<Row>(
-    `SELECT country, country_name, COUNT(*) AS n FROM pm_events WHERE tenant_id = $1 AND country IS NOT NULL
+    `SELECT country, country_name, COUNT(*) AS n FROM ${eventsReadTable()} WHERE tenant_id = $1 AND country IS NOT NULL
       GROUP BY country, country_name ORDER BY n DESC LIMIT 100`,
     [tenantId],
   );
   const utm = await rdb.sql<Row>(
-    `SELECT utm_source, utm_medium, utm_campaign, COUNT(*) AS n FROM pm_events
+    `SELECT utm_source, utm_medium, utm_campaign, COUNT(*) AS n FROM ${eventsReadTable()}
       WHERE tenant_id = $1 AND (utm_source IS NOT NULL OR utm_campaign IS NOT NULL)
       GROUP BY utm_source, utm_medium, utm_campaign ORDER BY n DESC LIMIT 500`,
     [tenantId],
@@ -535,12 +585,12 @@ export async function visitorBreakdown(tenantId: string, days = 30): Promise<Vis
   const [perVisitor, bots, ctx] = await Promise.all([
     rdb.sql<Row>(
       `SELECT anonymous_id, country, country_name, COUNT(*) AS events, MAX(CASE WHEN is_bot = TRUE THEN 1 ELSE 0 END) AS any_bot
-         FROM pm_events WHERE tenant_id = $1 AND occurred_at >= $2 GROUP BY anonymous_id, country, country_name LIMIT ${MAX_VISITORS * 2}`,
+         FROM ${eventsReadTable()} WHERE tenant_id = $1 AND occurred_at >= $2 GROUP BY anonymous_id, country, country_name LIMIT ${MAX_VISITORS * 2}`,
       [tenantId, since],
     ),
     rdb.sql<Row>(
       `SELECT bot_name, bot_category, bot_verified, COUNT(*) AS events
-         FROM pm_events WHERE tenant_id = $1 AND occurred_at >= $2 AND is_bot = TRUE
+         FROM ${eventsReadTable()} WHERE tenant_id = $1 AND occurred_at >= $2 AND is_bot = TRUE
         GROUP BY bot_name, bot_category, bot_verified ORDER BY events DESC LIMIT 10`,
       [tenantId, since],
     ),
@@ -588,7 +638,7 @@ export async function conversionFunnel(tenantId: string, days = 30): Promise<Fun
   const cap = 50_000;
   const r = await reportDb(tenantId).sql<Row>(
     `SELECT site, event_type, anonymous_id, COUNT(*) AS events
-       FROM pm_events
+       FROM ${eventsReadTable()}
       WHERE tenant_id = $1 AND occurred_at >= $2 AND is_bot = FALSE
         AND event_type IN (${FUNNEL_EVENT_TYPES.map(lit).join(',')})
       GROUP BY site, event_type, anonymous_id
@@ -613,10 +663,14 @@ export interface ReclassifyResult {
   changed: number;
   before: { human: number; bot: number };
   after: { human: number; bot: number };
+  /** True while the pm_events_v2 backfill runs: the migration reclassifies once it's verified. */
+  deferred?: boolean;
+  /** The table that was reclassified. */
+  table?: string;
 }
 
-async function botSplit(): Promise<{ human: number; bot: number }> {
-  const r = await db().sql<Row>(`SELECT is_bot, COUNT(*) AS n FROM pm_events GROUP BY is_bot`);
+async function botSplit(table: string): Promise<{ human: number; bot: number }> {
+  const r = await db().sql<Row>(`SELECT is_bot, COUNT(*) AS n FROM ${table} GROUP BY is_bot`);
   const n = (b: boolean) => Number(r.rows.find((x) => asBool(x.is_bot) === b)?.n ?? 0);
   return { human: n(false), bot: n(true) };
 }
@@ -633,22 +687,26 @@ const sameVerdict = (r: Row, c: Classification) =>
  */
 export async function reclassifyEvents(matcher: CrawlerMatcher, batchSize = 500): Promise<ReclassifyResult> {
   await ensureEventsTable();
+  const { read, write } = eventsTables();
+  if (!write || write !== read) {
+    return { scanned: 0, changed: 0, before: { human: 0, bot: 0 }, after: { human: 0, bot: 0 }, deferred: true, table: read };
+  }
   try {
-    return await reclassifyBatches(matcher, batchSize);
+    return { ...(await reclassifyBatches(matcher, batchSize, write)), table: write };
   } finally {
     invalidateReports();
   }
 }
 
-async function reclassifyBatches(matcher: CrawlerMatcher, batchSize: number): Promise<ReclassifyResult> {
-  const before = await botSplit();
+async function reclassifyBatches(matcher: CrawlerMatcher, batchSize: number, table: string): Promise<ReclassifyResult> {
+  const before = await botSplit(table);
   let scanned = 0;
   let changed = 0;
   const seen = new Set<string>();
   for (let guard = 0; guard < 10_000; guard++) {
     const res = await db().sql<Row>(
       `SELECT event_id, user_agent, ip, is_bot, bot_name, bot_category, bot_verified, device_type
-         FROM pm_events WHERE bot_rules_version IS NULL OR bot_rules_version < ${CLASSIFIER_VERSION} LIMIT ${batchSize}`,
+         FROM ${table} WHERE bot_rules_version IS NULL OR bot_rules_version < ${CLASSIFIER_VERSION} LIMIT ${batchSize}`,
     );
     if (!res.rows.length) break;
     if (res.rows.some((r) => seen.has(String(r.event_id)))) throw new Error('reclassify: UPDATE did not persist; stopping');
@@ -668,16 +726,16 @@ async function reclassifyBatches(matcher: CrawlerMatcher, batchSize: number): Pr
     }
     for (const { c, ids } of groups.values()) {
       await db().sql(
-        `UPDATE pm_events SET is_bot = ${lit(c.isBot)}, bot_name = ${lit(c.botName)}, bot_category = ${lit(c.botCategory)},
+        `UPDATE ${table} SET is_bot = ${lit(c.isBot)}, bot_name = ${lit(c.botName)}, bot_category = ${lit(c.botCategory)},
                 bot_verified = ${lit(c.botVerified)}, device_type = ${lit(c.deviceType)}, bot_rules_version = ${CLASSIFIER_VERSION}
           WHERE event_id IN (${ids.map(lit).join(',')})`,
       );
       changed += ids.length;
     }
     if (stampOnly.length) {
-      await db().sql(`UPDATE pm_events SET bot_rules_version = ${CLASSIFIER_VERSION} WHERE event_id IN (${stampOnly.map(lit).join(',')})`);
+      await db().sql(`UPDATE ${table} SET bot_rules_version = ${CLASSIFIER_VERSION} WHERE event_id IN (${stampOnly.map(lit).join(',')})`);
     }
     scanned += res.rows.length;
   }
-  return { scanned, changed, before, after: await botSplit() };
+  return { scanned, changed, before, after: await botSplit(table) };
 }
