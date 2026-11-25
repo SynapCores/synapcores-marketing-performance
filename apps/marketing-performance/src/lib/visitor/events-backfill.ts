@@ -124,8 +124,11 @@ class Copier {
     const r = await this.retrying('bounds', () => this.d.sql(boundsSql(PM_EVENTS_TABLE)));
     const x = r.rows[0] ?? {};
     const ts = (v: unknown) => {
+      if (v == null) return null;
       const t = parseSqlTs(v);
-      return t == null ? null : formatSqlTs(t);
+      // A shape we can't window by would silently skip the copy: stop loudly instead.
+      if (t == null) throw new Error(`unexpected received_at shape from the engine: ${JSON.stringify(String(v).slice(0, 40))}`);
+      return formatSqlTs(t);
     };
     return { lo: ts(x.lo), hi: ts(x.hi), n: Number(x.n ?? 0) || 0 };
   }

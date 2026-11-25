@@ -211,7 +211,7 @@ export type BackfillOptions = typeof BACKFILL;
 /** 'YYYY-MM-DD HH:MM:SS' (UTC, as stored by sqlTs) → epoch ms; null when not that shape. */
 export function parseSqlTs(s: unknown): number | null {
   if (typeof s !== 'string') return null;
-  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?Z?$/.exec(s.trim());
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?(?:Z|[+-]00:?00)?$/.exec(s.trim());
   if (!m) return null;
   const t = Date.parse(`${m[1]}T${m[2]}Z`);
   return Number.isFinite(t) ? t : null;

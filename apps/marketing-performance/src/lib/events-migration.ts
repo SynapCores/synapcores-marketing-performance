@@ -136,13 +136,13 @@ export async function ensurePmEventsStore(): Promise<void> {
 }
 
 /**
- * Called every 15 min by the instrumentation hook: restart a backfill that
- * stopped on an engine failure (not on an integrity error, which needs a look).
+ * Called every 15 min by the instrumentation hook: restart a backfill (or a
+ * catch-up, in state v2) that stopped on an engine failure; not one that
+ * stopped on an integrity error, which needs a look. Both are idempotent.
  */
 export function retryStoppedPmEventsMigration(hooks: MigrationHooks = {}): void {
   const s = shared();
   if (!pmEventsV2Enabled() || s.runner || !s.stopped || s.stopped.name === 'PmEventsIntegrityError') return;
-  if (s.meta?.state === 'v2') return;
   console.warn(`${TAG} retrying the stopped backfill (stopped: ${s.stopped.message})`);
   void startPmEventsMigration(hooks);
 }

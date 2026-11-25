@@ -108,8 +108,17 @@ class FakeEngine {
     throw new Error(`fake: table ${name}`);
   }
 
+  /** INSERTs into v2 that "land" without their last row (silent partial write), for the missing-redo path. */
+  dropOnInsert = 0;
+  /** MIN/MAX come back in a shape the backfill can't window by. */
+  weirdBounds = false;
+  /** Rows with these ids are silently not stored, whatever is retried. */
+  neverLands = new Set<string>();
+
   private exec(stmt: string): Row[] {
     const project = (r: Row) => Object.fromEntries(PM_EVENT_COLUMNS.map((c) => [c, r[c] ?? null]));
+    // The backfill must never write the old table (it is the frozen rollback source).
+    if (/^(?:INSERT INTO|UPDATE|DELETE FROM) pm_events(?![_\w])/.test(stmt)) throw new Error('fake: the backfill wrote pm_events');
     let m = /^SELECT (.+) FROM (\w+) WHERE received_at >= '([^']+)' AND received_at < '([^']+)' LIMIT (\d+)$/.exec(stmt);
     if (m) {
       const rows = this.table(m[2]!).filter((r) => r.received_at != null && String(r.received_at) >= m![3]! && String(r.received_at) < m![4]!);
@@ -127,6 +136,7 @@ class FakeEngine {
     if ((m = /^SELECT MIN\(received_at\) AS lo, MAX\(received_at\) AS hi, COUNT\(\*\) AS n FROM (\w+)$/.exec(stmt))) {
       const t = this.table(m[1]!);
       const ts = t.map((r) => r.received_at).filter((v): v is string => typeof v === 'string').sort();
+      if (this.weirdBounds) return [{ lo: 'Nov 18 2026', hi: 'Nov 24 2026', n: t.length }];
       return [{ lo: ts[0] ?? null, hi: ts[ts.length - 1] ?? null, n: t.length }];
     }
     if ((m = /^SELECT COUNT\(\*\) AS n FROM (\w+)$/.exec(stmt))) return [{ n: this.table(m[1]!).length }];
@@ -145,7 +155,15 @@ class FakeEngine {
     if ((m = /^INSERT INTO (\w+) \(([^)]+)\) VALUES (.*)$/s.exec(stmt))) {
       const cols = m[2]!.split(',');
       const t = this.table(m[1]!);
-      for (const tuple of parseValues(m[3]!)) t.push(Object.fromEntries(cols.map((c, i) => [c, tuple[i] ?? null])));
+      const tuples = parseValues(m[3]!);
+      if (this.dropOnInsert > 0 && tuples.length > 1) {
+        this.dropOnInsert--;
+        tuples.pop();
+      }
+      for (const tuple of tuples) {
+        const r = Object.fromEntries(cols.map((c, i) => [c, tuple[i] ?? null]));
+        if (!this.neverLands.has(String(r.event_id))) t.push(r);
+      }
       return [{ count: 1 }];
     }
     throw new Error(`fake: unsupported statement ${stmt.slice(0, 80)}`);
@@ -283,7 +301,8 @@ test('two crashes in a row, then an ambiguous reply: still exact', async () => {
   for (const [a, b] of [[5, 9], [20, 21], [33, 60]] as const) {
     const { e, live, deps } = setup();
     let runs = 0;
-    e.fault = (c) => (c === a ? 'crash' : null);
+    let fired = 0;
+    e.fault = (c) => (c === a ? (fired++, 'crash') : null);
     for (;;) {
       try {
         await runBackfill(parseStoreMeta(e.meta), deps);
@@ -292,9 +311,11 @@ test('two crashes in a row, then an ambiguous reply: still exact', async () => {
         if ((err as Error).name !== 'SimulatedCrash') throw err;
         runs++;
         const base = e.calls;
-        e.fault = runs === 1 ? (c) => (c === base + b ? 'crash' : null) : (c) => (c === base + 3 ? 'ambiguous' : null);
+        e.fault = runs === 1 ? (c) => (c === base + b ? (fired++, 'crash') : null) : (c) => (c === base + 3 ? (fired++, 'ambiguous') : null);
       }
     }
+    assert.equal(runs, 2, `both crashes happened (${a}/${b})`);
+    assert.equal(fired, 3, 'all three faults fired');
     assertExact(e, live, `crashes ${a}/${b}`);
   }
 });
@@ -398,7 +419,71 @@ test('INSERT batches are packed by SQL size as well as rows', async () => {
   assert.deepEqual(insertGroups('pm_events_v2', rows.slice(0, 1), 4, 10).map((g) => g.length), [1], 'a row bigger than the budget still goes alone');
 });
 
-test('a window result the engine truncates is split, never taken as complete', async () => {
+test('an INSERT that silently drops a row is caught by the per-window count and redone', async () => {
+  const { e, live, deps, start } = setup();
+  e.dropOnInsert = 2;
+  const meta = await runBackfill(start, deps);
+  assertExact(e, live, 'silent partial insert');
+  assert.equal(meta.checked, e.old.length);
+});
+
+test('a window that keeps losing rows stops with an integrity error after 3 copies', async () => {
+  const { e, deps, start } = setup();
+  e.onCall = null;
+  e.neverLands.add(String(e.old[12]!.event_id));
+  await assert.rejects(runBackfill(start, deps), (err: Error) => err.name === 'PmEventsIntegrityError' && /still missing after 3 copies/.test(err.message));
+});
+
+test('an engine that never comes back: the retries are bounded and the error surfaces', async () => {
+  const { e, deps, start } = setup();
+  e.onCall = null;
+  e.fault = (n) => (n > 6 ? 'transient' : null);
+  await assert.rejects(runBackfill(start, { ...deps, maxAttempts: 4 }), (err: Error) => err.name === 'SynapCoresUnavailableError');
+  assert.ok(e.calls < 200, `bounded (${e.calls} statements)`);
+});
+
+test('two passes that both miss a row: integrity error, no flip', async () => {
+  const { e, deps, start } = setup();
+  e.onCall = null;
+  let k = 0;
+  const sql = deps.sql;
+  await assert.rejects(
+    runBackfill(start, {
+      ...deps,
+      sql: async (stmt) => {
+        // each final count sees a new row behind the watermark that no window will read again
+        if (stmt === 'SELECT COUNT(*) AS n FROM pm_events') e.old.push(row(900 + k, null, { event_id: `ghost-${k++}`, received_at: '2026-11-18 00:00:00' }));
+        return sql(stmt);
+      },
+    }),
+    (err: Error) => err.name === 'PmEventsIntegrityError' && /after 2 passes/.test(err.message),
+  );
+});
+
+test('rows newer than the end of pm_events that appear mid-run are copied too', async () => {
+  const { e, live, deps, start } = setup();
+  let added = false;
+  const prev = e.onCall!;
+  e.onCall = (n) => {
+    prev(n);
+    if (!added && n === 30) {
+      added = true;
+      e.old.push(row(950, '2026-11-24 23:59:59', { event_id: 'newer-1' }));
+    }
+  };
+  const meta = await runBackfill(start, deps);
+  assert.ok(added);
+  assertExact(e, live, 'newer row');
+  assert.equal(meta.checked, e.old.length);
+});
+
+test('received_at bounds in an unexpected shape stop the copy loudly (no silent skip)', async () => {
+  const { e, deps, start } = setup();
+  e.weirdBounds = true;
+  await assert.rejects(runBackfill(start, deps), /unexpected received_at shape/);
+});
+
+test('if the engine ever truncates a window result (it does when a SELECT has no LIMIT), the window is split', async () => {
   const { e, live, deps, start } = setup();
   e.truncateAbove = 10;
   const meta = await runBackfill(start, deps);

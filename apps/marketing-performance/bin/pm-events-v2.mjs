@@ -4,6 +4,7 @@
 //   node bin/pm-events-v2.mjs [--env /etc/mktperf/app.env] status
 //   node bin/pm-events-v2.mjs [--env …] verify
 //   node bin/pm-events-v2.mjs [--env …] reverse-copy [--apply] [--since 'YYYY-MM-DD HH:MM:SS'] [--force] [--pause-ms 3000]
+//   node bin/pm-events-v2.mjs [--env …] dedupe [--apply]
 //
 // status        migration state, row counts and a column/type comparison of the two tables (read-only).
 // verify        every pm_events row must be in pm_events_v2 exactly once with identical values. Differences only
@@ -21,6 +22,11 @@
 //               Each INSERT into the indexed pm_events costs ~0.5 s and a memory spike on 2.5.1: rows go up to
 //               500 per statement (and ~90 KB of SQL; the engine limit is ~100 KB), with --pause-ms (default
 //               3000) between statements.
+//
+// dedupe        repair duplicate event ids in pm_events_v2 (the backfill refuses to flip while any exist):
+//               delete every copy, insert one back (from pm_events when it has the row), check exactly once.
+//               Dry run unless --apply. Never delete duplicates by hand: a plain DELETE + restart would resume
+//               past those windows and flip without the deleted rows.
 //
 // Engine: SYNAPCORES_URL + SYNAPCORES_ADMIN_API_KEY from --env <file> (only those two keys are read, both
 // required there), or from the environment without --env. Prints counts (and at most 5 event ids of
@@ -88,7 +94,7 @@ export function redact(msg) {
     .replace(/'(?:[^']|'')*'/g, "'…'")
     .replace(/"(?:[^"\\]|\\.)*"/g, (m) => (m.length > 40 ? '"…"' : m))
     .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, '<ip>')
-    .replace(/\b[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}\b/gi, '<ip>')
+    .replace(/\b(?:[0-9a-f]{0,4}:){3,7}[0-9a-f]{0,4}\b/gi, '<ip>')
     .slice(0, 300);
 }
 
@@ -118,6 +124,12 @@ export function packValues(rows, maxRows = 500, maxBytes = 90 * 1024) {
   return out;
 }
 
+/** The engine's answer for a missing table: HTTP 400 "Table or collection '…' does not exist" (or a 404). */
+export function isNotFound(e) {
+  const m = String(e?.message ?? e);
+  return /engine HTTP (400|404):/.test(m) && /does not exist|not found/i.test(m);
+}
+
 /** Strict argument parsing: known command and flags only. */
 export function parseArgs(argv) {
   const out = { cmd: null, env: null, apply: false, force: false, since: null, pauseMs: 3000 };
@@ -141,8 +153,9 @@ export function parseArgs(argv) {
     else if (out.cmd == null) out.cmd = a;
     else throw new Error(`unexpected argument ${a}`);
   }
-  if (!['status', 'verify', 'reverse-copy'].includes(out.cmd ?? '')) throw new Error('command must be status, verify or reverse-copy');
-  if (out.cmd !== 'reverse-copy' && (out.apply || out.force || out.since)) throw new Error('--apply/--force/--since go with reverse-copy');
+  if (!['status', 'verify', 'reverse-copy', 'dedupe'].includes(out.cmd ?? '')) throw new Error('command must be status, verify, reverse-copy or dedupe');
+  if (out.cmd !== 'reverse-copy' && (out.force || out.since)) throw new Error('--force/--since go with reverse-copy');
+  if (!['reverse-copy', 'dedupe'].includes(out.cmd) && out.apply) throw new Error('--apply goes with reverse-copy or dedupe');
   return out;
 }
 
@@ -233,12 +246,14 @@ async function bounds(table) {
   if (!Number.isFinite(n)) throw new Error(`no count from ${table}`);
   return { lo: t(r.lo), hi: t(r.hi), n };
 }
+/** False only on the engine's not-found answer; any other failure (engine down, bad key, timeout) is thrown. */
 async function tableExists(table) {
   try {
     await sql(`SELECT COUNT(*) AS n FROM ${table} LIMIT 1`);
     return true;
-  } catch {
-    return false;
+  } catch (e) {
+    if (isNotFound(e)) return false;
+    throw e;
   }
 }
 async function readMeta() {
@@ -433,15 +448,52 @@ async function reverseCopy() {
   return 0;
 }
 
+/**
+ * Repair duplicate event ids in pm_events_v2 (the backfill refuses to flip while any exist). For each
+ * duplicated id: delete every copy, insert one back (the pm_events row when it has one, else the first v2
+ * copy), then check each id is there exactly once. Dry run unless --apply. Safe to run again. Run it with
+ * the backfill stopped (it stops itself on duplicates) or after the flip; then restart the app.
+ */
+async function dedupe() {
+  if (!(await tableExists(V2))) { console.log(`${V2} does not exist`); return 0; }
+  const seen = new Map();
+  const b = await bounds(V2);
+  await forEachWindow(V2, b.lo, async (rows) => {
+    for (const r of rows) seen.set(String(r.event_id), (seen.get(String(r.event_id)) ?? 0) + 1);
+  });
+  const dups = [...seen].filter(([, n]) => n > 1).map(([id]) => id);
+  const extra = [...seen.values()].reduce((a, n) => a + (n > 1 ? n - 1 : 0), 0);
+  console.log(`dedupe (${ARGS.apply ? 'APPLY' : 'dry run'}): ${V2} rows ${b.n}, distinct ids ${seen.size}, duplicated ids ${dups.length} (${extra} extra rows)`);
+  if (!dups.length || !ARGS.apply) return 0;
+  let fixed = 0;
+  for (const part of chunk(dups, 100)) {
+    const fromOld = new Map((await idsIn(OLD, part, COLS)).map((r) => [String(r.event_id), r]));
+    const keep = new Map();
+    for (const r of await idsIn(V2, part, COLS)) if (!keep.has(String(r.event_id))) keep.set(String(r.event_id), r);
+    const rows = part.map((id) => fromOld.get(id) ?? keep.get(id)).filter(Boolean);
+    if (rows.length !== part.length) throw new Error('dedupe: a duplicated id vanished meanwhile; run it again');
+    await sql(`DELETE FROM ${V2} WHERE event_id IN (${part.map(lit).join(',')})`);
+    for (const values of packValues(rows, 500, 64 * 1024)) {
+      await sql(`INSERT INTO ${V2} (${COLUMNS.join(',')}) VALUES ${values.join(',')}`);
+    }
+    const n = await count(`SELECT COUNT(*) AS n FROM ${V2} WHERE event_id IN (${part.map(lit).join(',')})`);
+    if (n !== part.length) throw new Error(`dedupe: ${n} rows for ${part.length} ids after the repair; run it again`);
+    fixed += part.length;
+  }
+  const d = await one(`SELECT COUNT(*) AS n, COUNT(DISTINCT event_id) AS d FROM ${V2}`);
+  console.log(`dedupe: repaired ${fixed} ids; ${V2} now ${d.n} rows, ${d.d} distinct ids`);
+  return Number(d.n) === Number(d.d) ? 0 : 1;
+}
+
 async function main(argv) {
   try {
     ARGS = parseArgs(argv);
   } catch (e) {
     console.error(`error: ${e.message}`);
-    console.error('usage: node pm-events-v2.mjs [--env <app.env>] status | verify | reverse-copy [--apply] [--since TS] [--force] [--pause-ms N]');
+    console.error('usage: node pm-events-v2.mjs [--env <app.env>] status | verify | reverse-copy [--apply] [--since TS] [--force] [--pause-ms N] | dedupe [--apply]');
     return 64;
   }
-  const run = { status, verify, 'reverse-copy': reverseCopy }[ARGS.cmd];
+  const run = { status, verify, 'reverse-copy': reverseCopy, dedupe }[ARGS.cmd];
   return run();
 }
 

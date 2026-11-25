@@ -113,6 +113,9 @@ test('windows: timestamps, spans and bounds', () => {
   assert.equal(parseSqlTs('2026-11-20 01:02:03'), Date.UTC(2026, 10, 20, 1, 2, 3));
   assert.equal(parseSqlTs('2026-11-20T01:02:03.456Z'), Date.UTC(2026, 10, 20, 1, 2, 3));
   assert.equal(parseSqlTs('20 Nov'), null);
+  assert.equal(parseSqlTs('2026-11-20 01:02:03+00:00'), Date.UTC(2026, 10, 20, 1, 2, 3));
+  assert.equal(parseSqlTs('2026-11-20T01:02:03+0000'), Date.UTC(2026, 10, 20, 1, 2, 3));
+  assert.equal(parseSqlTs('2026-11-20 01:02:03+05:00'), null, 'a non-UTC offset is not silently taken as UTC');
   assert.equal(parseSqlTs(null), null);
   assert.equal(formatSqlTs(Date.UTC(2026, 10, 20, 1, 2, 3, 999)), '2026-11-20 01:02:03');
   assert.deepEqual(windowBounds('2026-11-20 23:30:00', 3_600_000), { lo: '2026-11-20 23:30:00', hi: '2026-11-21 00:30:00' });
@@ -142,7 +145,8 @@ test('backfill SQL: explicit columns and LIMITs, validated timestamps and tables
   assert.throws(() => windowSelectSql('users', '2026-11-20 00:00:00', '2026-11-20 01:00:00', 10));
   assert.throws(() => windowSelectSql('pm_events', '2026-11-20 00:00:00', '2026-11-20 01:00:00', 0));
   assert.ok(BACKFILL.windowLimit > 2 * BACKFILL.targetRows, 'a normal window never fills its LIMIT');
-  assert.ok(BACKFILL.idChunk * 4 > 1000 || BACKFILL.idChunk <= 1000);
+  const uuids = Array.from({ length: BACKFILL.idChunk }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+  assert.ok(idsInSql('pm_events_v2', uuids, 'ids').length < 99_996, 'an id lookup stays under the engine statement limit');
   assert.equal(boundsSql('pm_events'), 'SELECT MIN(received_at) AS lo, MAX(received_at) AS hi, COUNT(*) AS n FROM pm_events');
   assert.equal(countSinceSql('pm_events', '2026-11-25 08:00:00'), "SELECT COUNT(*) AS n FROM pm_events WHERE received_at >= '2026-11-25 08:00:00'");
   assert.equal(dupCheckSql('pm_events_v2'), 'SELECT COUNT(*) AS n, COUNT(DISTINCT event_id) AS d FROM pm_events_v2');
@@ -233,6 +237,12 @@ test('ops script (bin/pm-events-v2.mjs): columns, reply envelope, dates, strict 
   assert.equal(packs.flat().length, 60);
   // engine errors can echo row values: quoted literals and IPs are redacted
   assert.equal(ops.redact("parse error near '203.0.113.7' and 10.0.0.1"), "parse error near '…' and <ip>");
+  assert.equal(ops.redact('at 06:05:58 from 2001:db8::7'), 'at 06:05:58 from <ip>');
+  // only the engine's not-found answer means "missing"; anything else must surface
+  assert.equal(ops.isNotFound(new Error("engine HTTP 400: Query operation error: Table or collection '…' does not exist")), true);
+  for (const m of ['engine HTTP 401: unauthorized', 'connect ECONNREFUSED 127.0.0.1:18420', 'engine request timed out', 'engine HTTP 500: does not exist']) assert.equal(ops.isNotFound(new Error(m)), false, m);
+  assert.equal(ops.parseArgs(['dedupe', '--apply']).apply, true);
+  assert.throws(() => ops.parseArgs(['dedupe', '--since', '2026-11-24 10:00:00']));
   // verify tolerates sweep/reclassify edits only in those columns
   const a = { ...row, ip: '198.51.100.7', ip_truncated: false, is_bot: false };
   const b = { ...row, ip: '198.51.100.0', ip_truncated: true, is_bot: true };
